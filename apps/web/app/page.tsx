@@ -1,6 +1,9 @@
 import React from 'react';
+import type { UserRole } from '@healthiva/types';
 
 export default function ReceptionDashboard() {
+  const receptionistRole: UserRole = 'receptionist';
+
   return (
     <div style={{ padding: '40px', maxWidth: '1200px', margin: '0 auto' }}>
       <header style={{
@@ -25,7 +28,7 @@ export default function ReceptionDashboard() {
           <div>
             <h1 style={{ margin: 0, fontSize: '32px', fontWeight: 800 }}>Healthiva</h1>
             <p style={{ margin: '4px 0 0 0', opacity: 0.9, fontSize: '15px' }}>
-              Clinic Assistant & Reception Control Center — Day 1 Setup Active
+              Clinic Assistant & Reception Control Center (Next.js 14 App Router)
             </p>
           </div>
         </div>
@@ -36,7 +39,7 @@ export default function ReceptionDashboard() {
           <h3 style={{ color: '#1a6f8a', marginTop: 0 }}>📋 Receptionist Queue</h3>
           <p style={{ color: '#4a5568', fontSize: '14px' }}>Fast Walk-In & Phone Call appointment token registration system.</p>
           <div style={{ background: '#f0f7fa', padding: '12px', borderRadius: '8px', borderLeft: '4px solid #1a6f8a', fontSize: '13px' }}>
-            Status: Ready for Day 2 Token Queue Integration
+            Active Module Role: <strong>{receptionistRole.toUpperCase()}</strong>
           </div>
         </div>
 
@@ -44,7 +47,7 @@ export default function ReceptionDashboard() {
           <h3 style={{ color: '#0d9373', marginTop: 0 }}>💊 In-House Medicine Master</h3>
           <p style={{ color: '#4a5568', fontSize: '14px' }}>Manage clinic-tailored drug inventory with instant search & import.</p>
           <div style={{ background: '#f0fff4', padding: '12px', borderRadius: '8px', borderLeft: '4px solid #0d9373', fontSize: '13px' }}>
-            Status: Clinic-scoped inventory ready
+            Status: Clinic-scoped inventory active
           </div>
         </div>
 
@@ -52,7 +55,7 @@ export default function ReceptionDashboard() {
           <h3 style={{ color: '#6b46c1', marginTop: 0 }}>🔐 Multi-Tenant Security</h3>
           <p style={{ color: '#4a5568', fontSize: '14px' }}>Supabase PostgreSQL with strict Row Level Security (RLS) by Clinic ID.</p>
           <div style={{ background: '#faf5ff', padding: '12px', borderRadius: '8px', borderLeft: '4px solid #6b46c1', fontSize: '13px' }}>
-            Status: Migration Script Created
+            Status: Monorepo linked
           </div>
         </div>
       </main>
