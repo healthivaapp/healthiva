@@ -1,18 +1,16 @@
 -- ====================================================================
--- HEALTHIVA DATABASE MIGRATION — DAY 1
+-- HEALTHIVA DATABASE MIGRATION — DAY 1 & 2 (AUTH & TENANT FOUNDATION ONLY)
 -- 01_init_tenant_schema.sql
--- Description: Multi-tenant setup, Enums, Clinics, Profiles, RLS Policies
+-- Description: Minimal multi-tenant foundation: Clinics, Profiles, Auth Sync & RLS
 -- ====================================================================
 
 -- 1. Enable Required Extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- 2. Create Role Enums
+-- 2. Create Enums for Auth & Tenant Management
 CREATE TYPE user_role_enum AS ENUM ('admin', 'doctor', 'receptionist', 'pharmacist');
 CREATE TYPE subscription_status_enum AS ENUM ('trial', 'active', 'suspended', 'cancelled');
-CREATE TYPE token_status_enum AS ENUM ('booked', 'waiting', 'with_doctor', 'done', 'cancelled');
-CREATE TYPE booking_type_enum AS ENUM ('walk_in', 'phone_call');
 
 -- 3. Create Clinics Table (Root Tenant Entity)
 CREATE TABLE IF NOT EXISTS public.clinics (
