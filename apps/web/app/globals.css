@@ -2,25 +2,64 @@
 
 :root {
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #0f172a;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-primary: #009fe3;
+  --color-primary-hover: #008bc7;
+  --color-dark-navy: #042451;
+  --font-sans: var(--font-plus-jakarta-sans), 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-plus-jakarta-sans), 'Plus Jakarta Sans', sans-serif;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ========================================================================= */
+/* HEALTHIVA SMOOTH SAAS ANIMATIONS (ZERO BLINKING / 60FPS HARDWARE ACCELERATED) */
+/* ========================================================================= */
+
+@keyframes floatGentle {
+  0%, 100% {
+    transform: translate3d(0, 0px, 0);
+  }
+  50% {
+    transform: translate3d(0, -10px, 0);
+  }
+}
+
+@keyframes pulseAmbient {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale3d(1, 1, 1);
+  }
+  50% {
+    opacity: 0.50;
+    transform: scale3d(1.05, 1.05, 1);
+  }
+}
+
+/* Silky smooth 6-second floating animation for showcase image */
+.animate-float {
+  animation: floatGentle 6s ease-in-out infinite;
+  will-change: transform;
+}
+
+/* Ambient background glow */
+.animate-pulse-glow {
+  animation: pulseAmbient 8s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+/* Smooth micro-interaction transitions */
+.smooth-transition {
+  transition: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
 }
