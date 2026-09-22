@@ -610,8 +610,9 @@ AS $$
 DECLARE
     v_roles JSONB;
 BEGIN
-    SELECT jsonb_agg(
-        jsonb_build_object(
+    SELECT jsonb_agg(role_obj) INTO v_roles
+    FROM (
+        SELECT jsonb_build_object(
             'id', r.id,
             'name', r.name,
             'description', r.description,
@@ -636,12 +637,12 @@ BEGIN
                 ),
                 '[]'::jsonb
             )
-        )
-    ) INTO v_roles
-    FROM public.roles r
-    WHERE (r.organization_id IS NULL OR r.organization_id = p_org_id)
-      AND LOWER(TRIM(r.name)) != 'owner'
-    ORDER BY r.is_custom ASC, r.name ASC;
+        ) AS role_obj
+        FROM public.roles r
+        WHERE (r.organization_id IS NULL OR r.organization_id = p_org_id)
+          AND LOWER(TRIM(r.name)) != 'owner'
+        ORDER BY r.is_custom ASC, r.name ASC
+    ) sub;
 
     RETURN COALESCE(v_roles, '[]'::jsonb);
 END;
