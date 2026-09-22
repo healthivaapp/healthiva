@@ -22,7 +22,24 @@ export async function signInWithEmail({ email, password }: SignInCredentials): P
       };
     }
 
-    // 2. Fetch User Profile from public.profiles
+    // 2. Fetch User Membership status to block suspended staff at login
+    const { data: memData } = await supabase
+      .from('memberships')
+      .select('status')
+      .eq('user_id', authData.user.id)
+      .limit(1)
+      .maybeSingle();
+
+    if (memData && (memData.status === 'suspended' || memData.status === 'disabled')) {
+      await supabase.auth.signOut();
+      return {
+        user: null,
+        profile: null,
+        error: 'Your staff access account has been suspended by the clinic owner. Please contact your clinic administrator.',
+      };
+    }
+
+    // 3. Fetch User Profile from public.profiles
     const { data: profileData, error: profileError } = await supabase
       .from('profiles')
       .select('*')

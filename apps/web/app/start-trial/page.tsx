@@ -5,6 +5,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { HEALTHIVA_SPECIALTIES } from '@healthiva/types';
+import { CheckIcon, CheckCircleIcon, MessageSquareIcon } from '../../components/icons';
 
 export default function StartTrialPage() {
   const router = useRouter();
@@ -97,7 +98,7 @@ export default function StartTrialPage() {
       } else {
         setSuccess(true);
         setTimeout(() => {
-          router.replace('/dashboard');
+          router.replace('/organization-settings?onboarding=true');
         }, 1500);
       }
     } catch (err: any) {
@@ -148,7 +149,7 @@ export default function StartTrialPage() {
               
               {/* Badge & Title */}
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#e8f6fd] border border-[#bae4fb] text-[#009fe3] text-xs font-bold mb-4 shadow-2xs">
-                <span>🎁 30-Day Free Trial · No Credit Card Required</span>
+                <span>30-Day Free Trial · No Credit Card Required</span>
               </div>
 
               <h1 className="text-2xl sm:text-3xl font-extrabold text-[#0f172a] tracking-tight mb-2">
@@ -161,7 +162,9 @@ export default function StartTrialPage() {
               {/* Success Notification */}
               {success ? (
                 <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 text-center my-6 animate-fadeIn">
-                  <div className="text-4xl mb-3">🎉</div>
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-3">
+                    <CheckCircleIcon className="w-7 h-7" />
+                  </div>
                   <h3 className="text-emerald-900 font-bold text-lg mb-1">
                     Free Trial Activated!
                   </h3>
@@ -407,7 +410,7 @@ export default function StartTrialPage() {
 
             <div>
               <div className="inline-block px-3 py-1 rounded-full bg-white/10 text-sky-200 text-xs font-semibold mb-6">
-                ✨ Full Feature Access Included
+                Full Feature Access Included
               </div>
 
               <h2 className="text-xl sm:text-2xl font-bold text-white mb-4 leading-snug">
@@ -416,23 +419,23 @@ export default function StartTrialPage() {
 
               <ul className="space-y-3.5 text-xs sm:text-sm text-slate-200 mb-8">
                 <li className="flex items-start gap-2.5">
-                  <span className="text-[#009fe3] font-bold text-base">✓</span>
+                  <CheckIcon className="w-4 h-4 text-[#009fe3] shrink-0 mt-0.5" />
                   <span><strong>Smart Appointments:</strong> Instant booking, queue management & SMS reminders.</span>
                 </li>
                 <li className="flex items-start gap-2.5">
-                  <span className="text-[#009fe3] font-bold text-base">✓</span>
+                  <CheckIcon className="w-4 h-4 text-[#009fe3] shrink-0 mt-0.5" />
                   <span><strong>Digital Rx & EMR:</strong> Fast prescription pad with pre-loaded medicine templates.</span>
                 </li>
                 <li className="flex items-start gap-2.5">
-                  <span className="text-[#009fe3] font-bold text-base">✓</span>
+                  <CheckIcon className="w-4 h-4 text-[#009fe3] shrink-0 mt-0.5" />
                   <span><strong>Billing & Invoices:</strong> GST-compliant invoices, dues tracking & online payments.</span>
                 </li>
                 <li className="flex items-start gap-2.5">
-                  <span className="text-[#009fe3] font-bold text-base">✓</span>
+                  <CheckIcon className="w-4 h-4 text-[#009fe3] shrink-0 mt-0.5" />
                   <span><strong>Multi-Staff Support:</strong> Role access for Doctors, Receptionists & Pharmacists.</span>
                 </li>
                 <li className="flex items-start gap-2.5">
-                  <span className="text-[#009fe3] font-bold text-base">✓</span>
+                  <CheckIcon className="w-4 h-4 text-[#009fe3] shrink-0 mt-0.5" />
                   <span><strong>99.9% Data Security:</strong> HIPAA-grade encryption & automatic daily cloud backups.</span>
                 </li>
               </ul>
@@ -440,8 +443,9 @@ export default function StartTrialPage() {
 
             {/* Bottom Support Quote */}
             <div className="pt-6 border-t border-white/15">
-              <div className="text-xs text-sky-200 font-medium">
-                💬 Need personalized onboarding assistance?
+              <div className="text-xs text-sky-200 font-medium flex items-center gap-1.5">
+                <MessageSquareIcon className="w-3.5 h-3.5 text-sky-200" />
+                <span>Need personalized onboarding assistance?</span>
               </div>
               <div className="text-xs text-slate-300 mt-0.5">
                 Our support team is available 24/7 to help you set up.

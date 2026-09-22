@@ -13,7 +13,8 @@
     "@healthiva/types": "*",
     "next": "16.3.3",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "resend": "^6.28.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

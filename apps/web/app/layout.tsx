@@ -17,6 +17,8 @@ export const metadata: Metadata = {
   },
 };
 
+import { BranchProvider } from '../context/branch-context';
+
 export default function RootLayout({
   children,
 }: {
@@ -25,7 +27,9 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${plusJakartaSans.variable} h-full antialiased`}>
       <body className={`${plusJakartaSans.className} min-h-full bg-white text-slate-900 overflow-x-hidden`}>
-        {children}
+        <BranchProvider>
+          {children}
+        </BranchProvider>
       </body>
     </html>
   );

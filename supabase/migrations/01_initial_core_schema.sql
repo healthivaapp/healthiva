@@ -50,9 +50,9 @@ CREATE TABLE IF NOT EXISTS public.organization_settings (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID UNIQUE NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
     specialty_template VARCHAR(100) DEFAULT 'general',
-    workflow_json JSONB DEFAULT '{"consultation_fee":30000,"followup_fee":15000,"token_style":"T-###"}'::jsonb,
-    brand_json JSONB DEFAULT '{"print_header":"Healthiva Clinic"}'::jsonb,
-    modules_json JSONB DEFAULT '{"reception":true,"billing":true,"pharmacy":false}'::jsonb,
+    workflow_json JSONB DEFAULT '{"consultation_fee":30000,"followup_fee":15000,"emergency_fee":50000,"token_style":"T-###","reset_daily":true}'::jsonb,
+    brand_json JSONB DEFAULT '{"print_header":"Healthiva Clinic","logo_url":null}'::jsonb,
+    modules_json JSONB DEFAULT '{"reception":true,"billing":true,"whatsapp_reminders":true,"pharmacy":false}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -157,5 +157,31 @@ CREATE POLICY "Users can view memberships in their organization"
     ON public.memberships FOR SELECT
     USING (organization_id IN (SELECT public.get_user_organization_ids()));
 
+CREATE POLICY "Members can view settings in their organization"
+    ON public.organization_settings FOR SELECT
+    USING (organization_id IN (SELECT public.get_user_organization_ids()));
+
+CREATE POLICY "Members can update settings in their organization"
+    ON public.organization_settings FOR UPDATE
+    USING (organization_id IN (SELECT public.get_user_organization_ids()));
+
 GRANT USAGE ON SCHEMA public TO authenticated;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;
+
+-- Storage Bucket: clinic-assets
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('clinic-assets', 'clinic-assets', TRUE)
+ON CONFLICT (id) DO NOTHING;
+
+CREATE POLICY "Allow public read of clinic assets"
+    ON storage.objects FOR SELECT
+    USING (bucket_id = 'clinic-assets');
+
+CREATE POLICY "Allow authenticated upload of clinic assets"
+    ON storage.objects FOR INSERT TO authenticated
+    WITH CHECK (bucket_id = 'clinic-assets');
+
+CREATE POLICY "Allow authenticated update of clinic assets"
+    ON storage.objects FOR UPDATE TO authenticated
+    USING (bucket_id = 'clinic-assets');
+

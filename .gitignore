@@ -31,3 +31,11 @@ yarn-error.log*
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Turbo
+.turbo
+.turbo/
+**/.turbo/
+**/.turbo/**
+*.turbo-build.log
+

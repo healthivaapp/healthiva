@@ -23,10 +23,24 @@ export default function ForgotPasswordPage() {
     setLoading(true);
 
     try {
-      const result = await sendPasswordResetEmail(email.trim());
+      const response = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email: email.trim() }),
+      });
 
-      if (result.error) {
-        setErrorMessage(result.error);
+      let data: any = {};
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        data = await response.json();
+      } else {
+        throw new Error('Server returned an invalid response. Please try again.');
+      }
+
+      if (!response.ok || data.error) {
+        setErrorMessage(data.error || 'Failed to process request.');
       } else {
         setSuccess(true);
       }
