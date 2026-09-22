@@ -5,11 +5,13 @@
 -- ============================================================================
 
 -- 1. Explicit verified clinic founders mapping table
-CREATE TEMP TABLE _verified_clinic_founders (
+CREATE TEMP TABLE IF NOT EXISTS _verified_clinic_founders (
     organization_id UUID PRIMARY KEY,
     primary_owner_user_id UUID NOT NULL,
     founder_name TEXT
-) ON COMMIT DROP;
+);
+
+TRUNCATE TABLE _verified_clinic_founders;
 
 -- Verified founder for active production clinic: Helix care
 INSERT INTO _verified_clinic_founders (organization_id, primary_owner_user_id, founder_name)
@@ -51,7 +53,7 @@ FROM _verified_clinic_founders v
 WHERE o.id = v.organization_id;
 
 -- 5. Enable internal sync bypass session variable for backfill
-SET LOCAL healthiva.rbac_internal_sync = 'on';
+SELECT set_config('healthiva.rbac_internal_sync', 'on', false);
 
 -- 6. Synchronize memberships for verified founders
 UPDATE public.memberships m
@@ -64,15 +66,24 @@ WHERE m.organization_id = v.organization_id
 -- 7. Migrate role_overrides JSON into organization_role_permissions
 INSERT INTO public.organization_role_permissions (organization_id, role_id, permission_id)
 SELECT 
-    s.organization_id,
+    parsed.organization_id,
     r.id AS role_id,
     p.id AS permission_id
-FROM public.organization_settings s,
-     jsonb_each(COALESCE(s.workflow_json->'role_overrides', '{}'::jsonb)) AS kv(role_name, perms_array),
-     jsonb_array_elements_text(kv.perms_array) AS perm_code(code)
-JOIN public.roles r ON LOWER(TRIM(r.name)) = LOWER(TRIM(kv.role_name))
-JOIN public.permissions p ON p.code = perm_code.code
+FROM (
+    SELECT 
+        s.organization_id,
+        kv.key AS role_name,
+        elem.value AS perm_code
+    FROM public.organization_settings s
+    CROSS JOIN LATERAL jsonb_each(COALESCE(s.workflow_json->'role_overrides', '{}'::jsonb)) AS kv
+    CROSS JOIN LATERAL jsonb_array_elements_text(kv.value) AS elem(value)
+) parsed
+JOIN public.roles r ON LOWER(TRIM(r.name)) = LOWER(TRIM(parsed.role_name))
+JOIN public.permissions p ON p.code = parsed.perm_code
 ON CONFLICT (organization_id, role_id, permission_id) DO NOTHING;
+
+-- Reset session variable after backfill
+SELECT set_config('healthiva.rbac_internal_sync', 'off', false);
 
 -- 8. Run 4-Point Health Invariant Assertion
 DO $$
@@ -139,3 +150,6 @@ ALTER TABLE public.organizations DROP CONSTRAINT IF EXISTS chk_active_org_must_h
 ALTER TABLE public.organizations
   ADD CONSTRAINT chk_active_org_must_have_owner 
   CHECK (status != 'active' OR primary_owner_user_id IS NOT NULL);
+
+-- 10. Clean up temporary mapping table
+DROP TABLE IF EXISTS _verified_clinic_founders;
