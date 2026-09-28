@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
+import { MailIcon } from '@/components/icons';
 import { sendPasswordResetEmail } from '@healthiva/supabase';
 
 export default function ForgotPasswordPage() {
@@ -87,7 +88,9 @@ export default function ForgotPasswordPage() {
 
           {success ? (
             <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 text-center animate-fadeIn">
-              <div className="text-3xl mb-2">📩</div>
+              <div className="w-12 h-12 mx-auto mb-2 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                <MailIcon className="w-6 h-6" />
+              </div>
               <h3 className="text-emerald-900 font-bold text-base mb-1">Reset Link Sent!</h3>
               <p className="text-emerald-700 text-xs leading-relaxed mb-4">
                 We have emailed a secure password recovery link to <strong>{email}</strong>. Please check your inbox and click the link to update your password.

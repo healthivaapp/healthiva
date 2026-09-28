@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { SettingsLayout } from '../../../components/settings-layout';
 import { useBranch, Branch } from '../../../context/branch-context';
+import { StaffTableSkeleton } from '../../../components/staff-table-skeleton';
 import { getCurrentUser, getSupabaseClient } from '@healthiva/supabase';
 import {
   CheckCircleIcon,
@@ -75,11 +76,25 @@ const CAPABILITY_TIERS = PERMISSION_CATEGORIES.map((cat) => ({
     .filter((p) => p.category === cat.key),
 }));
 
+export interface AvailableRole {
+  id: string;
+  name: string;
+  description?: string;
+  is_custom?: boolean;
+}
+
 export default function StaffSettingsPage() {
-  const { branches, organizationName } = useBranch();
+  const { branches, organizationName, isPrimaryOwner, refreshBranches } = useBranch();
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
   const [staffList, setStaffList] = useState<StaffMember[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Dynamic Clinic Roles (fetched from /api/roles)
+  const [availableRoles, setAvailableRoles] = useState<AvailableRole[]>([
+    { id: 'doctor', name: 'Doctor', description: 'OPD & Prescriptions' },
+    { id: 'receptionist', name: 'Receptionist', description: 'Patient Queue & Billing' },
+    { id: 'pharmacist', name: 'Pharmacist', description: 'Dispensing & Inventory' },
+  ]);
 
   // Dynamic Clinic Role Templates (synced live from /api/roles/permissions and /api/staff)
   const [roleTemplates, setRoleTemplates] = useState<Record<string, string[]>>({});
@@ -117,6 +132,14 @@ export default function StaffSettingsPage() {
   const [removeConfirmModalOpen, setRemoveConfirmModalOpen] = useState(false);
   const [linkModalOpen, setLinkModalOpen] = useState(false);
 
+  // Primary Ownership Transfer Modal State
+  const [transferModalOpen, setTransferModalOpen] = useState(false);
+  const [transferTargetStaff, setTransferTargetStaff] = useState<StaffMember | null>(null);
+  const [transferPassword, setTransferPassword] = useState('');
+  const [transferConfirmChecked, setTransferConfirmChecked] = useState(false);
+  const [transferError, setTransferError] = useState<string | null>(null);
+  const [transferring, setTransferring] = useState(false);
+
   // General Toast / Feedback
   const [submitting, setSubmitting] = useState(false);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
@@ -142,31 +165,33 @@ export default function StaffSettingsPage() {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [mobile, setMobile] = useState('');
-  const [roleName, setRoleName] = useState<'Doctor' | 'Receptionist' | 'Pharmacist'>('Doctor');
+  const [roleName, setRoleName] = useState<string>('Doctor');
   const [selectedBranchIds, setSelectedBranchIds] = useState<string[]>([]);
   const [specialty, setSpecialty] = useState('');
   const [permissionMode, setPermissionMode] = useState<'template' | 'custom'>('template');
   const [selectedCustomPerms, setSelectedCustomPerms] = useState<string[]>([]);
+  const [newOrgAuthority, setNewOrgAuthority] = useState<'none' | 'administrator'>('none');
 
   // State for EDIT ACTIVE STAFF MEMBER
   const [editingStaff, setEditingStaff] = useState<StaffMember | null>(null);
   const [editFullName, setEditFullName] = useState('');
   const [editEmail, setEditEmail] = useState('');
   const [editMobile, setEditMobile] = useState('');
-  const [editRoleName, setEditRoleName] = useState<'Doctor' | 'Receptionist' | 'Pharmacist'>('Doctor');
+  const [editRoleName, setEditRoleName] = useState<string>('Doctor');
   const [editSpecialty, setEditSpecialty] = useState('');
   const [editDefaultClinicId, setEditDefaultClinicId] = useState<string>('');
   const [editSelectedBranchIds, setEditSelectedBranchIds] = useState<string[]>([]);
   const [editPermissionMode, setEditPermissionMode] = useState<'template' | 'custom'>('template');
   const [editSelectedCustomPerms, setEditSelectedCustomPerms] = useState<string[]>([]);
   const [editStatus, setEditStatus] = useState<'active' | 'suspended'>('active');
+  const [editOrgAuthority, setEditOrgAuthority] = useState<'none' | 'administrator'>('none');
 
   // State for EDIT PENDING INVITATION
   const [editingInvite, setEditingInvite] = useState<StaffMember | null>(null);
   const [inviteEditFullName, setInviteEditFullName] = useState('');
   const [inviteEditEmail, setInviteEditEmail] = useState('');
   const [inviteEditMobile, setInviteEditMobile] = useState('');
-  const [inviteEditRoleName, setInviteEditRoleName] = useState<'Doctor' | 'Receptionist' | 'Pharmacist'>('Doctor');
+  const [inviteEditRoleName, setInviteEditRoleName] = useState<string>('Doctor');
   const [inviteEditSpecialty, setInviteEditSpecialty] = useState('');
   const [inviteEditBranchIds, setInviteEditBranchIds] = useState<string[]>([]);
 
@@ -202,15 +227,25 @@ export default function StaffSettingsPage() {
         setStaffList(data.staff);
       }
 
-      // Direct synchronization with /api/roles/permissions
+      // Direct synchronization with /api/roles and /api/roles/permissions
       try {
-        const rolesRes = await fetch(`/api/roles/permissions?t=${timestamp}`, {
-          cache: 'no-store',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Cache-Control': 'no-store, no-cache',
-          },
-        });
+        const [rolesRes, listRes] = await Promise.all([
+          fetch(`/api/roles/permissions?t=${timestamp}`, {
+            cache: 'no-store',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Cache-Control': 'no-store, no-cache',
+            },
+          }),
+          fetch(`/api/roles?t=${timestamp}`, {
+            cache: 'no-store',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Cache-Control': 'no-store, no-cache',
+            },
+          }),
+        ]);
+
         const rolesData = await rolesRes.json();
         if (rolesData.success && Array.isArray(rolesData.roles)) {
           rolesData.roles.forEach((r: any) => {
@@ -218,6 +253,11 @@ export default function StaffSettingsPage() {
               dynamicTemplates[r.roleName] = r.permissions;
             }
           });
+        }
+
+        const listData = await listRes.json();
+        if (listData.success && Array.isArray(listData.roles) && listData.roles.length > 0) {
+          setAvailableRoles(listData.roles);
         }
       } catch (rolesErr) {
         console.warn('[Note: role templates load bypass]:', rolesErr);
@@ -246,22 +286,15 @@ export default function StaffSettingsPage() {
     }
     init();
 
-    // Auto-refresh when user returns to this browser tab
-    const handleFocus = () => {
-      loadStaff();
-    };
-
-    // Auto-refresh when roles are saved in another tab
+    // Auto-refresh only when roles are saved in another tab (NOT on window focus to prevent flickering)
     const handleStorage = (e: StorageEvent) => {
       if (e.key === 'healthiva_roles_updated') {
         loadStaff();
       }
     };
 
-    window.addEventListener('focus', handleFocus);
     window.addEventListener('storage', handleStorage);
     return () => {
-      window.removeEventListener('focus', handleFocus);
       window.removeEventListener('storage', handleStorage);
     };
   }, [loadStaff]);
@@ -281,7 +314,7 @@ export default function StaffSettingsPage() {
     setInviteModalOpen(true);
   };
 
-  const handleRoleChange = (newRole: 'Doctor' | 'Receptionist' | 'Pharmacist') => {
+  const handleRoleChange = (newRole: string) => {
     setRoleName(newRole);
     if (permissionMode === 'custom') {
       setSelectedCustomPerms([...getRoleTemplate(newRole)]);
@@ -345,6 +378,7 @@ export default function StaffSettingsPage() {
           mobile: cleanPhone,
           roleName,
           branchIds: selectedBranchIds,
+          orgAuthority: newOrgAuthority,
           specialty: roleName === 'Doctor' ? specialty.trim() : undefined,
           permissionMode,
           customPermissions: permissionMode === 'custom' ? selectedCustomPerms : null,
@@ -421,6 +455,7 @@ export default function StaffSettingsPage() {
         : [...getRoleTemplate(validRole)]
     );
     setEditStatus(staff.status === 'suspended' ? 'suspended' : 'active');
+    setEditOrgAuthority(staff.orgAuthority === 'administrator' ? 'administrator' : 'none');
     setModalErrorMessage(null);
     setEditActiveModalOpen(true);
   };
@@ -485,6 +520,7 @@ export default function StaffSettingsPage() {
           email: editEmail.trim(),
           mobile: cleanPhone,
           roleName: isOwnerAccount ? 'Owner' : editRoleName,
+          ...(isPrimaryOwner ? { orgAuthority: isOwnerAccount ? 'primary_owner' : editOrgAuthority } : {}),
           specialty: editRoleName === 'Doctor' ? editSpecialty.trim() : null,
           branchIds: editSelectedBranchIds,
           defaultClinicId: editDefaultClinicId || editSelectedBranchIds[0],
@@ -515,9 +551,7 @@ export default function StaffSettingsPage() {
     setInviteEditFullName(invite.fullName || '');
     setInviteEditEmail(invite.email || '');
     setInviteEditMobile(invite.mobile || '');
-    const validRole = (['Doctor', 'Receptionist', 'Pharmacist'].includes(invite.roleName)
-      ? invite.roleName
-      : 'Doctor') as 'Doctor' | 'Receptionist' | 'Pharmacist';
+    const validRole = invite.roleName || 'Doctor';
     setInviteEditRoleName(validRole);
     setInviteEditSpecialty(invite.specialty || '');
     setInviteEditBranchIds(invite.assignedBranches.map((b) => b.id));
@@ -773,6 +807,68 @@ export default function StaffSettingsPage() {
     }
   };
 
+  // ==================== TRANSFER OWNERSHIP HANDLERS ====================
+  const openTransferOwnershipModal = (staff: StaffMember) => {
+    setTransferTargetStaff(staff);
+    setTransferPassword('');
+    setTransferConfirmChecked(false);
+    setTransferError(null);
+    setTransferModalOpen(true);
+  };
+
+  const handleExecuteTransferOwnership = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!transferTargetStaff?.userId) {
+      setTransferError('No user ID found for this Co-Owner.');
+      return;
+    }
+    if (!transferPassword.trim()) {
+      setTransferError('Please enter your primary owner password to authorize transfer.');
+      return;
+    }
+    if (!transferConfirmChecked) {
+      setTransferError('Please confirm the acknowledgment checkbox to authorize ownership transfer.');
+      return;
+    }
+
+    try {
+      setTransferring(true);
+      setTransferError(null);
+      const supabase = getSupabaseClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      const res = await fetch('/api/staff/transfer-ownership', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          targetUserId: transferTargetStaff.userId,
+          password: transferPassword.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || 'Failed to transfer ownership.');
+      }
+
+      setSuccessMessage(data.message || `Primary clinic ownership successfully transferred to ${transferTargetStaff.fullName}!`);
+      setTransferModalOpen(false);
+      setTransferTargetStaff(null);
+      await loadStaff();
+      if (refreshBranches) {
+        await refreshBranches();
+      }
+    } catch (err: unknown) {
+      setTransferError(err instanceof Error ? err.message : 'Error transferring ownership.');
+    } finally {
+      setTransferring(false);
+    }
+  };
+
   // Share Modal & Links
   const copyToClipboard = (text: string) => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
@@ -880,7 +976,17 @@ export default function StaffSettingsPage() {
       (staff.email || '').toLowerCase().includes(searchQuery.toLowerCase());
 
     const matchesRole =
-      roleFilter === 'All' || (staff.roleName || '').toLowerCase() === roleFilter.toLowerCase();
+      roleFilter === 'All'
+        ? true
+        : roleFilter.toLowerCase() === 'owner'
+        ? Boolean(
+            staff.isOwner ||
+            staff.isPrimaryOwner ||
+            staff.orgAuthority === 'administrator' ||
+            staff.orgAuthority === 'primary_owner' ||
+            staff.roleName?.toLowerCase() === 'owner'
+          )
+        : (staff.roleName || '').toLowerCase() === roleFilter.toLowerCase();
 
     const matchesBranch =
       branchFilter === 'All' ||
@@ -994,9 +1100,15 @@ export default function StaffSettingsPage() {
         {/* Informational Scope Hint */}
         <div className="text-xs text-slate-500 font-medium px-1 flex items-center gap-1.5">
           {activeDirectoryTab === 'active' ? (
-            <span>🟢 Verified clinic staff members with active branch access</span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+              <span>Verified clinic staff members with active branch access</span>
+            </span>
           ) : (
-            <span>🟡 Unaccepted invitations awaiting candidate registration</span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse shrink-0" />
+              <span>Unaccepted invitations awaiting candidate registration</span>
+            </span>
           )}
         </div>
       </div>
@@ -1029,9 +1141,12 @@ export default function StaffSettingsPage() {
               className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs sm:text-sm font-semibold text-slate-700 focus:outline-none focus:border-[#009fe3]"
             >
               <option value="All">All Roles</option>
-              <option value="Doctor">Doctors</option>
-              <option value="Receptionist">Receptionists</option>
-              <option value="Pharmacist">Pharmacists</option>
+              <option value="Owner">Owner / Co-Owner</option>
+              {availableRoles.map((r) => (
+                <option key={r.id || r.name} value={r.name}>
+                  {r.name}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -1056,9 +1171,7 @@ export default function StaffSettingsPage() {
       {/* Staff Directory Table / Cards */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xs overflow-hidden">
         {loading ? (
-          <div className="py-16 text-center text-slate-400 text-sm font-medium animate-pulse">
-            Loading clinic staff directory...
-          </div>
+          <StaffTableSkeleton rows={4} />
         ) : displayedStaff.length === 0 ? (
           activeDirectoryTab === 'active' ? (
             allActiveStaff.length === 0 ? (
@@ -1161,8 +1274,10 @@ export default function StaffSettingsPage() {
                 const isDoctor = roleLower === 'doctor';
                 const isReceptionist = roleLower === 'receptionist';
                 const isPharmacist = roleLower === 'pharmacist';
-                const isOwnerRole = roleLower === 'owner' || Boolean(staff.isOwner);
-                const isSuspended = staff.status === 'suspended';
+                const isOwnerRole = Boolean(
+                  staff.isPrimaryOwner || staff.orgAuthority === 'primary_owner' || roleLower === 'owner'
+                );
+                const isSuspended = staff.status === 'suspended' || staff.status === 'disabled';
 
                 return (
                   <div key={staff.membershipId || staff.invitationId} className="p-4 space-y-3">
@@ -1309,8 +1424,9 @@ export default function StaffSettingsPage() {
                         <BuildingIcon className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                         <span className="text-[11px] font-semibold text-slate-600">Branches:</span>
                         {isOwnerRole ? (
-                          <span className="text-[11px] bg-amber-50 text-amber-800 px-2 py-0.5 rounded border border-amber-200 font-bold">
-                            🌐 All Branches (Clinic Owner)
+                          <span className="inline-flex items-center gap-1 text-[11px] bg-amber-50 text-amber-800 px-2 py-0.5 rounded border border-amber-200 font-bold">
+                            <BuildingIcon className="w-3 h-3 text-amber-600 shrink-0" />
+                            <span>All Branches (Clinic Owner)</span>
                           </span>
                         ) : staff.assignedBranches.length === 0 ? (
                           <span className="text-[11px] text-rose-500 font-medium">None</span>
@@ -1366,6 +1482,42 @@ export default function StaffSettingsPage() {
                             <span>Revoke</span>
                           </button>
                         </>
+                      ) : isOwnerRole ? (
+                        isPrimaryOwner ? (
+                          <button
+                            onClick={() => openEditActiveModal(staff)}
+                            className="inline-flex items-center gap-1 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg cursor-pointer"
+                          >
+                            <PencilIcon className="w-3.5 h-3.5" />
+                            <span>Edit Profile</span>
+                          </button>
+                        ) : (
+                          <span
+                            className="inline-flex items-center gap-1 text-xs font-bold text-amber-800 bg-amber-50/80 px-2.5 py-1.5 rounded-lg border border-amber-200/80"
+                            title="Primary Owner account is protected"
+                          >
+                            <LockIcon className="w-3.5 h-3.5 text-amber-600" />
+                            <span>Protected</span>
+                          </span>
+                        )
+                      ) : staff.orgAuthority === 'administrator' && !isPrimaryOwner ? (
+                        staff.userId === user?.id ? (
+                          <button
+                            onClick={() => openEditActiveModal(staff)}
+                            className="inline-flex items-center gap-1 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg cursor-pointer"
+                          >
+                            <PencilIcon className="w-3.5 h-3.5" />
+                            <span>Edit Profile</span>
+                          </button>
+                        ) : (
+                          <span
+                            className="inline-flex items-center gap-1 text-xs font-bold text-indigo-700 bg-indigo-50/80 px-2.5 py-1.5 rounded-lg border border-indigo-200/80"
+                            title="Only the Primary Owner can manage Co-Owner accounts"
+                          >
+                            <LockIcon className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>Protected</span>
+                          </span>
+                        )
                       ) : (
                         <>
                           <button
@@ -1375,41 +1527,47 @@ export default function StaffSettingsPage() {
                             <PencilIcon className="w-3.5 h-3.5" />
                             <span>Edit Profile</span>
                           </button>
-                          {!isOwnerRole && (
-                            <>
-                              <button
-                                onClick={() => handleToggleStaffStatus(staff)}
-                                disabled={actionInProgress === staff.membershipId}
-                                className={`inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg cursor-pointer ${
-                                  isSuspended
-                                    ? 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200'
-                                    : 'text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200'
-                                }`}
-                              >
-                                {actionInProgress === staff.membershipId ? (
-                                  <>
-                                    <svg className="animate-spin h-3.5 w-3.5 text-current" viewBox="0 0 24 24" fill="none">
-                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                                    </svg>
-                                    <span>Updating...</span>
-                                  </>
-                                ) : (
-                                  <span>{isSuspended ? 'Reactivate' : 'Suspend'}</span>
-                                )}
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setTargetMemberToRemove(staff);
-                                  setRemoveConfirmModalOpen(true);
-                                }}
-                                className="inline-flex items-center justify-center p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg cursor-pointer"
-                                title="Remove Staff"
-                              >
-                                <XIcon className="w-4 h-4" />
-                              </button>
-                            </>
+                          {isPrimaryOwner && staff.orgAuthority === 'administrator' && (
+                            <button
+                              onClick={() => openTransferOwnershipModal(staff)}
+                              className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 px-2.5 py-1.5 rounded-lg border border-amber-200 cursor-pointer"
+                              title="Transfer Primary Clinic Ownership"
+                            >
+                              <CrownIcon className="w-3.5 h-3.5 text-amber-600" />
+                              <span>Transfer Ownership</span>
+                            </button>
                           )}
+                          <button
+                            onClick={() => handleToggleStaffStatus(staff)}
+                            disabled={actionInProgress === staff.membershipId}
+                            className={`inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg cursor-pointer ${
+                              isSuspended
+                                ? 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200'
+                                : 'text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200'
+                            }`}
+                          >
+                            {actionInProgress === staff.membershipId ? (
+                              <>
+                                <svg className="animate-spin h-3.5 w-3.5 text-current" viewBox="0 0 24 24" fill="none">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                </svg>
+                                <span>Updating...</span>
+                              </>
+                            ) : (
+                              <span>{isSuspended ? 'Reactivate' : 'Suspend'}</span>
+                            )}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setTargetMemberToRemove(staff);
+                              setRemoveConfirmModalOpen(true);
+                            }}
+                            className="inline-flex items-center justify-center p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg cursor-pointer"
+                            title="Remove Staff"
+                          >
+                            <XIcon className="w-4 h-4" />
+                          </button>
                         </>
                       )}
                     </div>
@@ -1438,8 +1596,11 @@ export default function StaffSettingsPage() {
                     const isDoctor = roleLower === 'doctor';
                     const isReceptionist = roleLower === 'receptionist';
                     const isPharmacist = roleLower === 'pharmacist';
-                    const isOwnerRole = roleLower === 'owner' || Boolean(staff.isOwner);
-                    const isSuspended = staff.status === 'suspended';
+                    const isOwnerRole = Boolean(
+                      staff.isPrimaryOwner || staff.orgAuthority === 'primary_owner' || roleLower === 'owner'
+                    );
+                    const isCoOwner = staff.orgAuthority === 'administrator' && !isOwnerRole;
+                    const isSuspended = staff.status === 'suspended' || staff.status === 'disabled';
 
                     return (
                       <tr key={staff.membershipId || staff.invitationId} className="hover:bg-slate-50/50 transition-colors">
@@ -1450,6 +1611,8 @@ export default function StaffSettingsPage() {
                               className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm shrink-0 ${
                                 isOwnerRole
                                   ? 'bg-amber-50 text-amber-600 border border-amber-200'
+                                  : isCoOwner
+                                  ? 'bg-indigo-50 text-indigo-600 border border-indigo-200'
                                   : isDoctor
                                   ? 'bg-sky-50 text-[#009fe3]'
                                   : isReceptionist
@@ -1464,9 +1627,13 @@ export default function StaffSettingsPage() {
                             <div className="min-w-0">
                               <div className="font-bold text-slate-900 truncate flex items-center gap-1.5">
                                 <span>{staff.fullName || 'Unnamed Staff'}</span>
-                                {isOwnerRole && (
+                                {isOwnerRole ? (
                                   <CrownIcon className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                                )}
+                                ) : isCoOwner ? (
+                                  <span title="Co-Owner (Administrator)">
+                                    <ShieldCheckIcon className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                                  </span>
+                                ) : null}
                               </div>
                               <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
                                 {staff.mobile && <span>+91 {staff.mobile}</span>}
@@ -1479,36 +1646,45 @@ export default function StaffSettingsPage() {
                         {/* Role & Specialization */}
                         <td className="py-4 px-4 whitespace-nowrap">
                           <div className="flex flex-col items-start gap-1">
-                            <span
-                              className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-md ${
-                                isOwnerRole
-                                  ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                  : isDoctor
-                                  ? 'bg-sky-50 text-[#009fe3]'
-                                  : isReceptionist
-                                  ? 'bg-purple-50 text-purple-600'
-                                  : isPharmacist
-                                  ? 'bg-emerald-50 text-emerald-600'
-                                  : 'bg-slate-100 text-slate-600'
-                              }`}
-                            >
-                              {isOwnerRole ? (
-                                <CrownIcon className="w-3.5 h-3.5" />
-                              ) : isDoctor ? (
-                                <StethoscopeIcon className="w-3.5 h-3.5" />
-                              ) : isReceptionist ? (
-                                <MonitorIcon className="w-3.5 h-3.5" />
-                              ) : isPharmacist ? (
-                                <PillIcon className="w-3.5 h-3.5" />
-                              ) : null}
-                              <span>{staff.roleName}</span>
-                            </span>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-md ${
+                                  isOwnerRole
+                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                    : isDoctor
+                                    ? 'bg-sky-50 text-[#009fe3]'
+                                    : isReceptionist
+                                    ? 'bg-purple-50 text-purple-600'
+                                    : isPharmacist
+                                    ? 'bg-emerald-50 text-emerald-600'
+                                    : 'bg-slate-100 text-slate-600'
+                                }`}
+                              >
+                                {isOwnerRole ? (
+                                  <CrownIcon className="w-3.5 h-3.5" />
+                                ) : isDoctor ? (
+                                  <StethoscopeIcon className="w-3.5 h-3.5" />
+                                ) : isReceptionist ? (
+                                  <MonitorIcon className="w-3.5 h-3.5" />
+                                ) : isPharmacist ? (
+                                  <PillIcon className="w-3.5 h-3.5" />
+                                ) : null}
+                                <span>{staff.roleName}</span>
+                              </span>
+
+                              {isCoOwner && (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                  <ShieldCheckIcon className="w-3 h-3 text-indigo-600" />
+                                  <span>Co-Owner</span>
+                                </span>
+                              )}
+                            </div>
 
                             {staff.specialty ? (
                               <span className="text-[11px] font-medium text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
                                 {staff.specialty}
                               </span>
-                            ) : !isOwnerRole && !isPendingView ? (
+                            ) : !isOwnerRole && !isCoOwner && !isPendingView ? (
                               <span
                                 className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${
                                   staff.permissionMode === 'custom'
@@ -1529,7 +1705,15 @@ export default function StaffSettingsPage() {
                           <div className="flex flex-wrap gap-1.5 max-w-xs">
                             {isOwnerRole ? (
                               <span className="inline-flex items-center gap-1.5 text-xs font-bold bg-amber-50 text-amber-800 px-2.5 py-1 rounded-lg border border-amber-200">
-                                <span>👑 🌐 All Branches (Clinic Owner)</span>
+                                <CrownIcon className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                <BuildingIcon className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                <span>All Branches (Clinic Owner)</span>
+                              </span>
+                            ) : isCoOwner ? (
+                              <span className="inline-flex items-center gap-1.5 text-xs font-bold bg-indigo-50 text-indigo-800 px-2.5 py-1 rounded-lg border border-indigo-200">
+                                <ShieldCheckIcon className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                                <BuildingIcon className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                                <span>All Branches (Co-Owner)</span>
                               </span>
                             ) : staff.assignedBranches.length === 0 ? (
                               <span className="text-xs text-rose-500 font-medium">No branch assigned</span>
@@ -1634,17 +1818,60 @@ export default function StaffSettingsPage() {
                             </div>
                           ) : isOwnerRole ? (
                             <div className="flex items-center justify-end gap-2">
-                              <button
-                                onClick={() => openEditActiveModal(staff)}
-                                className="inline-flex items-center gap-1 text-xs font-bold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
-                                title="Edit Profile & Contact Details"
-                              >
-                                <PencilIcon className="w-3.5 h-3.5" />
-                                <span>Edit Profile</span>
-                              </button>
+                              {isPrimaryOwner ? (
+                                <button
+                                  onClick={() => openEditActiveModal(staff)}
+                                  className="inline-flex items-center gap-1 text-xs font-bold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+                                  title="Edit Profile & Contact Details"
+                                >
+                                  <PencilIcon className="w-3.5 h-3.5" />
+                                  <span>Edit Profile</span>
+                                </button>
+                              ) : (
+                                <span
+                                  className="inline-flex items-center gap-1 text-xs font-bold text-amber-800 bg-amber-50/80 px-2.5 py-1.5 rounded-lg border border-amber-200/80"
+                                  title="Primary Owner profile can only be edited by the Primary Owner"
+                                >
+                                  <LockIcon className="w-3.5 h-3.5 text-amber-600" />
+                                  <span>Protected</span>
+                                </span>
+                              )}
+                            </div>
+                          ) : isCoOwner && !isPrimaryOwner ? (
+                            <div className="flex items-center justify-end gap-2">
+                              {staff.userId === user?.id ? (
+                                <button
+                                  onClick={() => openEditActiveModal(staff)}
+                                  className="inline-flex items-center gap-1 text-xs font-bold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+                                  title="Edit Your Profile & Contact Details"
+                                >
+                                  <PencilIcon className="w-3.5 h-3.5" />
+                                  <span>Edit Profile</span>
+                                </button>
+                              ) : (
+                                <span
+                                  className="inline-flex items-center gap-1 text-xs font-bold text-indigo-700 bg-indigo-50/80 px-2.5 py-1.5 rounded-lg border border-indigo-200/80"
+                                  title="Only the Primary Owner can manage Co-Owner accounts"
+                                >
+                                  <LockIcon className="w-3.5 h-3.5 text-indigo-600" />
+                                  <span>Protected</span>
+                                </span>
+                              )}
                             </div>
                           ) : (
                             <div className="flex items-center justify-end gap-1.5">
+                              {/* Transfer Primary Ownership to Co-Owner */}
+                              {isPrimaryOwner && staff.orgAuthority === 'administrator' && (
+                                <button
+                                  onClick={() => openTransferOwnershipModal(staff)}
+                                  className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 px-2.5 py-1.5 rounded-lg border border-amber-200 transition-colors cursor-pointer"
+                                  title="Transfer Primary Clinic Ownership to this Co-Owner"
+                                >
+                                  <CrownIcon className="w-3.5 h-3.5 text-amber-600" />
+                                  <span>Transfer Ownership</span>
+                                </button>
+                              )}
+
                               {/* Edit Profile & Capabilities */}
                               <button
                                 onClick={() => openEditActiveModal(staff)}
@@ -1809,13 +2036,17 @@ export default function StaffSettingsPage() {
                 </h3>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  {(['Doctor', 'Receptionist', 'Pharmacist'] as const).map((r) => {
-                    const isSelected = roleName === r;
+                  {availableRoles.map((r) => {
+                    const isSelected = roleName.toLowerCase() === r.name.toLowerCase();
+                    const isDoctor = r.name.toLowerCase() === 'doctor';
+                    const isReceptionist = r.name.toLowerCase() === 'receptionist';
+                    const isPharmacist = r.name.toLowerCase() === 'pharmacist';
+
                     return (
                       <button
-                        key={r}
+                        key={r.id || r.name}
                         type="button"
-                        onClick={() => handleRoleChange(r)}
+                        onClick={() => handleRoleChange(r.name)}
                         className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-3 ${
                           isSelected
                             ? 'border-[#009fe3] bg-sky-50/50 ring-2 ring-[#009fe3]/20'
@@ -1823,24 +2054,28 @@ export default function StaffSettingsPage() {
                         }`}
                       >
                         <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
-                          r === 'Doctor'
+                          isDoctor
                             ? 'bg-sky-100 text-[#009fe3]'
-                            : r === 'Receptionist'
+                            : isReceptionist
                             ? 'bg-purple-100 text-purple-600'
-                            : 'bg-emerald-100 text-emerald-600'
+                            : isPharmacist
+                            ? 'bg-emerald-100 text-emerald-600'
+                            : 'bg-indigo-100 text-indigo-600'
                         }`}>
-                          {r === 'Doctor' ? (
+                          {isDoctor ? (
                             <StethoscopeIcon className="w-4 h-4" />
-                          ) : r === 'Receptionist' ? (
+                          ) : isReceptionist ? (
                             <MonitorIcon className="w-4 h-4" />
-                          ) : (
+                          ) : isPharmacist ? (
                             <PillIcon className="w-4 h-4" />
+                          ) : (
+                            <ShieldCheckIcon className="w-4 h-4" />
                           )}
                         </div>
-                        <div>
-                          <div className="text-xs font-bold text-slate-900">{r}</div>
-                          <div className="text-[10px] text-slate-500">
-                            {r === 'Doctor' ? 'OPD & Rx' : r === 'Receptionist' ? 'Queue & Bill' : 'Dispensing'}
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-slate-900 truncate">{r.name}</div>
+                          <div className="text-[10px] text-slate-500 truncate max-w-[120px]">
+                            {isDoctor ? 'OPD & Rx' : isReceptionist ? 'Queue & Bill' : isPharmacist ? 'Dispensing' : (r.description || 'Custom Role')}
                           </div>
                         </div>
                       </button>
@@ -1866,6 +2101,73 @@ export default function StaffSettingsPage() {
                         onChange={(e) => setSpecialty(e.target.value)}
                         className="w-full px-3.5 py-2 rounded-lg border border-slate-300 bg-white text-xs font-medium focus:ring-2 focus:ring-[#009fe3]/20 focus:border-[#009fe3] outline-none"
                       />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Governance Authority Level */}
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                  Governance Authority Level
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label
+                    className={`p-3 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
+                      newOrgAuthority === 'none'
+                        ? 'border-sky-500 bg-sky-50/50 ring-2 ring-sky-500/20'
+                        : 'border-slate-200 hover:border-slate-300 bg-white'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="new_authority"
+                      checked={newOrgAuthority === 'none'}
+                      onChange={() => setNewOrgAuthority('none')}
+                      className="w-4 h-4 text-[#009fe3] mt-0.5"
+                    />
+                    <div>
+                      <div className="text-xs font-bold text-slate-900">Operational Staff</div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">
+                        Follows assigned role permissions across their branch access
+                      </div>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`p-3 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
+                      newOrgAuthority === 'administrator'
+                        ? 'border-indigo-500 bg-indigo-50/50 ring-2 ring-indigo-500/20'
+                        : 'border-slate-200 hover:border-slate-300 bg-white'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="new_authority"
+                      checked={newOrgAuthority === 'administrator'}
+                      onChange={() => {
+                        setNewOrgAuthority('administrator');
+                        setSelectedBranchIds(branches.map((b) => b.id));
+                      }}
+                      className="w-4 h-4 text-indigo-600 mt-0.5"
+                    />
+                    <div>
+                      <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                        <span>Co-Owner (Administrator)</span>
+                        <ShieldCheckIcon className="w-3.5 h-3.5 text-indigo-600" />
+                      </div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">
+                        Full clinic governance across all branches, staff & roles
+                      </div>
+                    </div>
+                  </label>
+                </div>
+
+                {newOrgAuthority === 'administrator' && (
+                  <div className="p-3 rounded-xl bg-indigo-50/80 border border-indigo-200/80 flex items-start gap-2.5">
+                    <ShieldCheckIcon className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                    <div className="text-[11px] text-indigo-950 leading-relaxed">
+                      <span className="font-bold text-indigo-900">Co-Owner Authority:</span> Full clinic governance across all hospital branches, staff invitations, and capability configuration.
                     </div>
                   </div>
                 )}
@@ -2203,22 +2505,118 @@ export default function StaffSettingsPage() {
                   </div>
                 </div>
               ) : (
+                <>
+                {/* Governance Authority Level */}
+                {!editingStaff.isOwner && !editingStaff.isPrimaryOwner && (
+                  isPrimaryOwner ? (
+                    <div className="space-y-2 pt-2 border-t border-slate-100">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                        Governance Authority Level
+                      </h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <label
+                          className={`p-3 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
+                            editOrgAuthority === 'none'
+                              ? 'border-sky-500 bg-sky-50/50 ring-2 ring-sky-500/20'
+                              : 'border-slate-200 hover:border-slate-300 bg-white'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="edit_authority"
+                            checked={editOrgAuthority === 'none'}
+                            onChange={() => setEditOrgAuthority('none')}
+                            className="w-4 h-4 text-[#009fe3] mt-0.5"
+                          />
+                          <div>
+                            <div className="text-xs font-bold text-slate-900">Operational Staff</div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              Follows assigned role permissions and branch scoping
+                            </div>
+                          </div>
+                        </label>
+
+                        <label
+                          className={`p-3 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
+                            editOrgAuthority === 'administrator'
+                              ? 'border-indigo-500 bg-indigo-50/50 ring-2 ring-indigo-500/20'
+                              : 'border-slate-200 hover:border-slate-300 bg-white'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="edit_authority"
+                            checked={editOrgAuthority === 'administrator'}
+                            onChange={() => {
+                              setEditOrgAuthority('administrator');
+                              setEditSelectedBranchIds(branches.map((b) => b.id));
+                            }}
+                            className="w-4 h-4 text-indigo-600 mt-0.5"
+                          />
+                          <div>
+                            <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                              <span>Co-Owner (Administrator)</span>
+                              <ShieldCheckIcon className="w-3.5 h-3.5 text-indigo-600" />
+                            </div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              Full clinic governance across all branches, staff & roles
+                            </div>
+                          </div>
+                        </label>
+                      </div>
+
+                      {editOrgAuthority === 'administrator' && (
+                        <div className="p-3 rounded-xl bg-indigo-50/80 border border-indigo-200/80 flex items-start gap-2.5">
+                          <ShieldCheckIcon className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                          <div className="text-[11px] text-indigo-950 leading-relaxed">
+                            <span className="font-bold text-indigo-900">Co-Owner Authority:</span> Full clinic governance across all hospital branches, staff invitations, and capability configuration.
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : editingStaff.orgAuthority === 'administrator' ? (
+                    <div className="space-y-2 pt-2 border-t border-slate-100">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                        Governance Authority Level
+                      </h3>
+                      <div className="p-3.5 rounded-xl bg-indigo-50/80 border border-indigo-200/80 flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0 font-bold">
+                            <ShieldCheckIcon className="w-4 h-4 text-indigo-600" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-indigo-900">Co-Owner (Administrator)</div>
+                            <div className="text-[11px] text-indigo-700">Full administrative & operational access across all branches</div>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-200/60 text-indigo-800">
+                          Protected Authority
+                        </span>
+                      </div>
+                    </div>
+                  ) : null
+                )}
+
                 <div className="space-y-3 pt-2 border-t border-slate-100">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
                     2. Role & Specialization
                   </h3>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    {(['Doctor', 'Receptionist', 'Pharmacist'] as const).map((r) => {
-                      const isSelected = editRoleName === r;
+                    {availableRoles.map((r) => {
+                      const isSelected = editRoleName.toLowerCase() === r.name.toLowerCase();
+                      const isDoctor = r.name.toLowerCase() === 'doctor';
+                      const isReceptionist = r.name.toLowerCase() === 'receptionist';
+                      const isPharmacist = r.name.toLowerCase() === 'pharmacist';
+
                       return (
                         <button
-                          key={r}
+                          key={r.id || r.name}
                           type="button"
                           onClick={() => {
-                            setEditRoleName(r);
+                            setEditRoleName(r.name);
                             if (editPermissionMode === 'custom') {
-                              setEditSelectedCustomPerms(getRoleTemplate(r));
+                              setEditSelectedCustomPerms(getRoleTemplate(r.name));
                             }
                           }}
                           className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-3 ${
@@ -2228,24 +2626,28 @@ export default function StaffSettingsPage() {
                           }`}
                         >
                           <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
-                            r === 'Doctor'
+                            isDoctor
                               ? 'bg-sky-100 text-[#009fe3]'
-                              : r === 'Receptionist'
+                              : isReceptionist
                               ? 'bg-purple-100 text-purple-600'
-                              : 'bg-emerald-100 text-emerald-600'
+                              : isPharmacist
+                              ? 'bg-emerald-100 text-emerald-600'
+                              : 'bg-indigo-100 text-indigo-600'
                           }`}>
-                            {r === 'Doctor' ? (
+                            {isDoctor ? (
                               <StethoscopeIcon className="w-4 h-4" />
-                            ) : r === 'Receptionist' ? (
+                            ) : isReceptionist ? (
                               <MonitorIcon className="w-4 h-4" />
-                            ) : (
+                            ) : isPharmacist ? (
                               <PillIcon className="w-4 h-4" />
+                            ) : (
+                              <ShieldCheckIcon className="w-4 h-4" />
                             )}
                           </div>
-                          <div>
-                            <div className="text-xs font-bold text-slate-900">{r}</div>
-                            <div className="text-[10px] text-slate-500">
-                              {r === 'Doctor' ? 'OPD & Rx' : r === 'Receptionist' ? 'Queue & Bill' : 'Dispensing'}
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-slate-900 truncate">{r.name}</div>
+                            <div className="text-[10px] text-slate-500 truncate max-w-[120px]">
+                              {isDoctor ? 'OPD & Rx' : isReceptionist ? 'Queue & Bill' : isPharmacist ? 'Dispensing' : (r.description || 'Custom Role')}
                             </div>
                           </div>
                         </button>
@@ -2268,6 +2670,7 @@ export default function StaffSettingsPage() {
                     </div>
                   )}
                 </div>
+                </>
               )}
 
               {/* Branch Scoping & Default Primary Branch */}
@@ -2505,7 +2908,7 @@ export default function StaffSettingsPage() {
               )}
 
               {/* Status & Account Governance */}
-              {!editingStaff.isOwner && (
+              {!editingStaff.isOwner && editingStaff.userId !== user?.id && (isPrimaryOwner || editingStaff.orgAuthority !== 'administrator') && (
                 <div className="space-y-3 pt-2 border-t border-slate-100">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
                     5. Account Access Status
@@ -2551,7 +2954,7 @@ export default function StaffSettingsPage() {
               )}
 
               {/* Danger Zone */}
-              {!editingStaff.isOwner && (
+              {!editingStaff.isOwner && editingStaff.userId !== user?.id && (isPrimaryOwner || editingStaff.orgAuthority !== 'administrator') && (
                 <div className="pt-2 border-t border-rose-100">
                   <div className="p-4 rounded-xl bg-rose-50/60 border border-rose-200/80 flex items-center justify-between">
                     <div>
@@ -2687,19 +3090,19 @@ export default function StaffSettingsPage() {
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                   Invited Role *
                 </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['Doctor', 'Receptionist', 'Pharmacist'] as const).map((r) => (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {availableRoles.map((r) => (
                     <button
-                      key={r}
+                      key={r.id || r.name}
                       type="button"
-                      onClick={() => setInviteEditRoleName(r)}
-                      className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                        inviteEditRoleName === r
+                      onClick={() => setInviteEditRoleName(r.name)}
+                      className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer truncate ${
+                        inviteEditRoleName.toLowerCase() === r.name.toLowerCase()
                           ? 'border-[#009fe3] bg-sky-50/60 text-[#009fe3] ring-1 ring-[#009fe3]'
                           : 'border-slate-200 hover:border-slate-300 text-slate-700 bg-white'
                       }`}
                     >
-                      {r}
+                      {r.name}
                     </button>
                   ))}
                 </div>
@@ -2930,7 +3333,7 @@ export default function StaffSettingsPage() {
 
             {whatsAppNotice && (
               <div className="mb-3 p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 text-left flex items-start gap-2">
-                <span className="shrink-0 text-sm">📲</span>
+                <MailIcon className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <div>
                   <span className="font-bold">WhatsApp Notice: </span>
                   <span>{whatsAppNotice}</span>
@@ -3018,6 +3421,140 @@ export default function StaffSettingsPage() {
             >
               Done / Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== MODAL 7: Transfer Primary Ownership Dialog ==================== */}
+      {transferModalOpen && transferTargetStaff && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 overflow-hidden my-8 animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+                  <CrownIcon className="w-5 h-5 text-amber-600" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">
+                    Transfer Primary Ownership
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Handover founder authority of {organizationName || 'the clinic'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setTransferModalOpen(false);
+                  setTransferTargetStaff(null);
+                  setTransferError(null);
+                }}
+                className="w-8 h-8 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 flex items-center justify-center cursor-pointer"
+              >
+                <XIcon className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleExecuteTransferOwnership} className="p-6 space-y-4">
+              {transferError && (
+                <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs sm:text-sm font-medium flex items-start gap-2.5 shadow-2xs">
+                  <AlertTriangleIcon className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-bold text-rose-900">Transfer Error</div>
+                    <div className="mt-0.5 text-rose-700 leading-relaxed">{transferError}</div>
+                  </div>
+                </div>
+              )}
+
+              {/* Warning Notice */}
+              <div className="p-4 rounded-xl bg-amber-50 border border-amber-200/80 text-amber-900 text-xs space-y-1.5 leading-relaxed">
+                <div className="font-bold text-amber-900 flex items-center gap-1.5">
+                  <AlertTriangleIcon className="w-4 h-4 text-amber-700 shrink-0" />
+                  <span>Important Clinic Governance Action</span>
+                </div>
+                <p className="text-amber-800">
+                  You are about to transfer <strong>Primary Founder Ownership</strong> to{' '}
+                  <strong>{transferTargetStaff.fullName}</strong> ({transferTargetStaff.email}).
+                </p>
+                <p className="text-amber-800">
+                  After this transfer, you will become a <strong>Co-Owner (Administrator)</strong>. Only the new primary owner will have the authority to manage clinic transfer or close the organization.
+                </p>
+              </div>
+
+              {/* Target Staff Summary */}
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1.5 text-xs">
+                <div className="flex items-center justify-between text-slate-600">
+                  <span className="font-medium text-slate-500">New Primary Owner:</span>
+                  <span className="font-bold text-slate-900">{transferTargetStaff.fullName}</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-600">
+                  <span className="font-medium text-slate-500">Email Address:</span>
+                  <span className="font-medium text-slate-800">{transferTargetStaff.email}</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-600">
+                  <span className="font-medium text-slate-500">Current Role:</span>
+                  <span className="font-bold text-indigo-700">Co-Owner ({transferTargetStaff.roleName})</span>
+                </div>
+              </div>
+
+              {/* Security Re-Authentication Password */}
+              <div className="space-y-1 pt-1">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Confirm Primary Owner Password *
+                </label>
+                <p className="text-[11px] text-slate-500 mb-1.5">
+                  Enter your current login password to verify your identity and authorize this handover.
+                </p>
+                <input
+                  type="password"
+                  required
+                  placeholder="Enter your account password"
+                  value={transferPassword}
+                  onChange={(e) => {
+                    setTransferPassword(e.target.value);
+                    if (transferError) setTransferError(null);
+                  }}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm font-medium focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none"
+                />
+              </div>
+
+              {/* Acknowledgment Checkbox */}
+              <label className="flex items-start gap-2.5 pt-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={transferConfirmChecked}
+                  onChange={(e) => setTransferConfirmChecked(e.target.checked)}
+                  className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 border-slate-300 mt-0.5"
+                />
+                <span className="text-xs font-semibold text-slate-700 leading-normal">
+                  I understand that this action is immediate and irrevocably transfers primary clinic ownership to {transferTargetStaff.fullName}.
+                </span>
+              </label>
+
+              {/* Modal Buttons */}
+              <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTransferModalOpen(false);
+                    setTransferTargetStaff(null);
+                    setTransferError(null);
+                  }}
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm font-bold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={transferring || !transferConfirmChecked || !transferPassword.trim()}
+                  className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs sm:text-sm font-bold transition-all cursor-pointer shadow-sm flex items-center gap-2"
+                >
+                  <CrownIcon className="w-4 h-4 text-white" />
+                  <span>{transferring ? 'Transferring...' : 'Authorize Ownership Transfer'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

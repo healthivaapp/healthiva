@@ -22,6 +22,7 @@ export interface SendStaffInviteParams {
   inviteLink: string;
   inviterName?: string;
   branches?: string[];
+  authCode?: string;
 }
 
 export async function sendStaffInvitationEmail({
@@ -32,6 +33,7 @@ export async function sendStaffInvitationEmail({
   inviteLink,
   inviterName,
   branches,
+  authCode,
 }: SendStaffInviteParams) {
   const resend = getResendClient();
   if (!resend) {
@@ -86,7 +88,7 @@ export async function sendStaffInvitationEmail({
               </p>
 
               <!-- Details Card -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f1f5f9; border-radius: 12px; padding: 18px 20px; margin-bottom: 28px; border: 1px solid #e2e8f0;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f1f5f9; border-radius: 12px; padding: 18px 20px; margin-bottom: 24px; border: 1px solid #e2e8f0;">
                 <tr>
                   <td style="font-size: 13px; color: #64748b; padding-bottom: 8px;">Clinic:</td>
                   <td style="font-size: 13px; font-weight: 700; color: #0f172a; padding-bottom: 8px; text-align: right;">${clinicName}</td>
@@ -100,6 +102,15 @@ export async function sendStaffInvitationEmail({
                   <td style="font-size: 13px; font-weight: 600; color: #0f172a; text-align: right;">${branchListText}</td>
                 </tr>
               </table>
+
+              ${authCode ? `
+              <!-- 6-Digit Verification Code -->
+              <div style="background-color: #f0f9ff; border: 1.5px dashed #009fe3; border-radius: 14px; padding: 18px; text-align: center; margin-bottom: 24px;">
+                <div style="font-size: 12px; font-weight: 700; color: #0369a1; text-transform: uppercase; letter-spacing: 1px;">Invitation Verification Code</div>
+                <div style="font-size: 30px; font-weight: 800; color: #009fe3; letter-spacing: 6px; margin: 8px 0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">${authCode}</div>
+                <div style="font-size: 12px; color: #64748b; line-height: 1.4;">Enter this 6-digit code on the setup screen to verify your email and activate your account.</div>
+              </div>
+              ` : ''}
 
               <!-- CTA Button -->
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom: 24px;">
@@ -119,7 +130,7 @@ export async function sendStaffInvitationEmail({
               </div>
 
               <p style="font-size: 12px; color: #94a3b8; line-height: 1.5; margin: 0;">
-                ⏰ This secure invitation link will expire in 7 days. If you did not expect this invitation, you can safely ignore this email.
+                Notice: This secure invitation link will expire in 7 days. If you did not expect this invitation, you can safely ignore this email.
               </p>
             </td>
           </tr>

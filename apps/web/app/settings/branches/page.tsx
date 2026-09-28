@@ -31,8 +31,8 @@ export default function BranchesSettingsPage() {
   const [branchCode, setBranchCode] = useState('');
   const [address, setAddress] = useState('');
   const [phone, setPhone] = useState('');
-  const [city, setCity] = useState('Surat');
-  const [stateName, setStateName] = useState('Gujarat');
+  const [city, setCity] = useState('');
+  const [stateName, setStateName] = useState('');
   const [pincode, setPincode] = useState('');
   const [isActive, setIsActive] = useState(true);
 
@@ -50,8 +50,8 @@ export default function BranchesSettingsPage() {
     setBranchCode('');
     setAddress('');
     setPhone('');
-    setCity('Surat');
-    setStateName('Gujarat');
+    setCity('');
+    setStateName('');
     setPincode('');
     setIsActive(true);
     setErrorMessage(null);
@@ -65,8 +65,8 @@ export default function BranchesSettingsPage() {
     setBranchCode(branch.code || '');
     setAddress(branch.address || '');
     setPhone(branch.phone || '');
-    setCity(branch.city || 'Surat');
-    setStateName((branch as any).state || 'Gujarat');
+    setCity(branch.city || '');
+    setStateName((branch as any).state || '');
     setPincode((branch as any).pincode || '');
     setIsActive(branch.is_active ?? true);
     setErrorMessage(null);
@@ -205,8 +205,8 @@ export default function BranchesSettingsPage() {
         code: editingBranch?.code === 'MAIN' ? 'MAIN' : branchCode.trim().toUpperCase(),
         address: address.trim() || null,
         phone: phone.trim() ? phone.trim().replace(/[^0-9+ ]/g, '') : null,
-        city: city.trim() || 'Surat',
-        state: stateName.trim() || 'Gujarat',
+        city: city.trim() || null,
+        state: stateName.trim() || null,
         pincode: pincode.trim() || null,
         is_active: editingBranch?.code === 'MAIN' ? true : isActive,
       };
@@ -443,7 +443,7 @@ export default function BranchesSettingsPage() {
                 </div>
               )}
 
-              <form onSubmit={handleSaveBranch} className="space-y-4">
+              <form onSubmit={handleSaveBranch} className="space-y-4" autoComplete="off" data-form-type="other">
                 {/* Branch Name */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">
@@ -452,6 +452,7 @@ export default function BranchesSettingsPage() {
                   <input
                     type="text"
                     required
+                    autoComplete="off"
                     value={branchName}
                     onChange={(e) => setBranchName(e.target.value)}
                     placeholder="e.g. Helix Care Main"
@@ -467,6 +468,7 @@ export default function BranchesSettingsPage() {
                   <input
                     type="text"
                     required
+                    autoComplete="off"
                     disabled={editingBranch?.code === 'MAIN'}
                     value={branchCode}
                     onChange={(e) => setBranchCode(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 10))}
@@ -491,9 +493,10 @@ export default function BranchesSettingsPage() {
                   </label>
                   <textarea
                     rows={2}
+                    autoComplete="off"
                     value={address}
                     onChange={(e) => setAddress(e.target.value)}
-                    placeholder="e.g. 5, Manmandir Society, Chhaparabhatha Road, Amroli"
+                    placeholder="e.g. 101, Medical Enclave, Ring Road"
                     className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:border-[#009fe3] focus:ring-2 focus:ring-[#009fe3]/20 text-xs sm:text-sm text-slate-900 outline-none transition-all resize-none"
                   />
                   <span className="text-[11px] text-slate-400 mt-1 block">
@@ -510,9 +513,10 @@ export default function BranchesSettingsPage() {
                     </label>
                     <input
                       type="text"
+                      autoComplete="off"
                       value={city}
                       onChange={(e) => setCity(e.target.value.replace(/[\d!@#$%^&*()_+={}\[\]:;<>?,./]/g, ''))}
-                      placeholder="Surat"
+                      placeholder="e.g. Mumbai"
                       className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:border-[#009fe3] text-xs text-slate-900 outline-none"
                     />
                   </div>
@@ -524,9 +528,10 @@ export default function BranchesSettingsPage() {
                     </label>
                     <input
                       type="text"
+                      autoComplete="off"
                       value={stateName}
                       onChange={(e) => setStateName(e.target.value.replace(/[\d!@#$%^&*()_+={}\[\]:;<>?,./]/g, ''))}
-                      placeholder="Gujarat"
+                      placeholder="e.g. Maharashtra"
                       className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:border-[#009fe3] text-xs text-slate-900 outline-none"
                     />
                   </div>
@@ -539,9 +544,10 @@ export default function BranchesSettingsPage() {
                     <input
                       type="text"
                       maxLength={6}
+                      autoComplete="off"
                       value={pincode}
                       onChange={(e) => setPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                      placeholder="395004"
+                      placeholder="400001"
                       className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:border-[#009fe3] text-xs font-mono text-slate-900 outline-none"
                     />
                   </div>
@@ -555,6 +561,7 @@ export default function BranchesSettingsPage() {
                   <input
                     type="text"
                     maxLength={10}
+                    autoComplete="off"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
                     placeholder="e.g. 9876543210"

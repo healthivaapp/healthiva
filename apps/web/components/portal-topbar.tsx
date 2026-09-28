@@ -48,6 +48,7 @@ export function PortalTopbar({ user, currentPortal, onSwitchPortal }: PortalTopb
     specialty,
     organizationName,
     toggleMobileSidebar,
+    loading,
   } = useBranch();
 
   const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
@@ -114,12 +115,10 @@ export function PortalTopbar({ user, currentPortal, onSwitchPortal }: PortalTopb
     currentUser?.email?.split('@')[0] ||
     'Clinic Member';
 
-  const doctorFormattedName =
-    rawFullName.toLowerCase().startsWith('dr.') || rawFullName.toLowerCase().startsWith('dr ')
-      ? rawFullName
-      : `Dr. ${rawFullName}`;
-
-  const displayName = currentPortal === 'doctor' ? doctorFormattedName : rawFullName;
+  // Strip accidental "Dr." or "Dr " prefix if the user is NOT in doctor portal or role
+  const isDoctorRole = currentPortal === 'doctor' || userRole === 'doctor' || (isOwner && mode === 'doctor');
+  const cleanBaseName = rawFullName.replace(/^dr\.?\s*/i, '');
+  const displayName = isDoctorRole ? `Dr. ${cleanBaseName}` : cleanBaseName;
 
   // Real clinical specialty (e.g. Pediatrician, Dentist, General Physician) or staff role
   const roleSubtitle =
@@ -181,7 +180,7 @@ export function PortalTopbar({ user, currentPortal, onSwitchPortal }: PortalTopb
           >
             <BuildingIcon className="w-3.5 h-3.5 text-[#009fe3] shrink-0" />
             <span className="max-w-[85px] sm:max-w-[170px] truncate text-slate-900 font-extrabold">
-              {activeBranch?.name || 'Healthiva Clinic - Ahmedabad'}
+              {activeBranch?.name || organizationName || (loading ? 'Loading...' : 'Clinic Branch')}
             </span>
             <ChevronDownIcon
               className={`w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform ${branchDropdownOpen ? 'rotate-180' : ''}`}
@@ -195,27 +194,20 @@ export function PortalTopbar({ user, currentPortal, onSwitchPortal }: PortalTopb
                   Switch Active Branch
                 </span>
                 <span className="text-[11px] font-bold text-[#009fe3] bg-sky-50 px-2 py-0.5 rounded-full">
-                  {branches.filter((b: Branch) => b.is_active).length || 1} Branches
+                  {branches.filter((b: Branch) => b.is_active).length} Branches
                 </span>
               </div>
 
               <div className="max-h-56 overflow-y-auto py-1">
-                {(branches.filter((b: Branch) => b.is_active).length > 0
-                  ? branches.filter((b: Branch) => b.is_active)
-                  : [
-                      {
-                        id: 'default',
-                        organization_id: '',
-                        name: 'Healthiva Clinic - Ahmedabad',
-                        code: 'MAIN',
-                        address: 'Main Branch',
-                        phone: null,
-                        city: 'Ahmedabad',
-                        is_active: true,
-                      },
-                    ]
-                ).map((b: Branch) => {
-                  const isSelected = b.id === (activeBranch?.id || 'default');
+                {branches.filter((b: Branch) => b.is_active).length === 0 ? (
+                  <div className="px-4 py-4 text-xs text-slate-400 text-center font-medium">
+                    {loading ? 'Loading assigned branches...' : 'No branches assigned'}
+                  </div>
+                ) : (
+                  branches
+                    .filter((b: Branch) => b.is_active)
+                    .map((b: Branch) => {
+                      const isSelected = b.id === activeBranch?.id;
                   return (
                     <button
                       key={b.id}
@@ -239,8 +231,9 @@ export function PortalTopbar({ user, currentPortal, onSwitchPortal }: PortalTopb
                       </div>
                     </button>
                   );
-                })}
-              </div>
+                })
+              )}
+            </div>
 
               {isOwner && mode === 'owner' && (
                 <div className="pt-2 px-3 border-t border-slate-100">
@@ -396,16 +389,6 @@ export function PortalTopbar({ user, currentPortal, onSwitchPortal }: PortalTopb
                 </button>
               )}
 
-              {isOwner && mode === 'owner' && (
-                <NextLink
-                  href="/settings"
-                  onClick={() => setProfileDropdownOpen(false)}
-                  className="w-full text-left px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                >
-                  <SettingsIcon className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Clinic Settings</span>
-                </NextLink>
-              )}
 
               <button
                 onClick={() => {

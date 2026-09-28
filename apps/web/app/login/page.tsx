@@ -1,11 +1,13 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { signInWithEmail, getCurrentUser } from '@healthiva/supabase';
+import { signInWithEmail, getCurrentUser, getSupabaseClient } from '@healthiva/supabase';
 import type { AuthResult } from '@healthiva/types';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
+import { CheckCircleIcon } from '@/components/icons';
+import { HealthivaScreenLoader } from '@/components/healthiva-screen-loader';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -29,13 +31,36 @@ export default function LoginPage() {
     }
   }, []);
 
-  // If already authenticated, redirect forward to dashboard immediately (Case 6)
+  // If already authenticated, redirect forward to their role portal immediately
   useEffect(() => {
     async function checkExistingSession() {
       try {
         const user = await getCurrentUser();
         if (user) {
-          router.replace('/dashboard');
+          const supabase = getSupabaseClient();
+          const { data: { session } } = await supabase.auth.getSession();
+          let targetRoute = '/dashboard';
+          if (session?.access_token) {
+            try {
+              const roleRes = await fetch('/api/branches', {
+                headers: { Authorization: `Bearer ${session.access_token}` },
+              });
+              const roleData = await roleRes.json();
+              const resolvedRole = (roleData.userRole || '').toLowerCase();
+              if (!roleData.isOwner) {
+                if (resolvedRole === 'receptionist') {
+                  targetRoute = '/reception';
+                } else if (resolvedRole === 'pharmacist') {
+                  targetRoute = '/pharmacy';
+                } else if (resolvedRole === 'doctor') {
+                  targetRoute = '/doctor';
+                }
+              }
+            } catch (roleErr) {
+              console.warn('[Session Role Resolution]:', roleErr);
+            }
+          }
+          router.replace(targetRoute);
           return;
         }
       } catch (err) {
@@ -79,16 +104,39 @@ export default function LoginPage() {
           }
         }
 
-        // Determine role-based route
-        const role = result.profile?.role || result.user?.user_metadata?.role || 'owner';
+        // Determine role-based route by querying actual membership role & authority
         let targetRoute = '/dashboard';
-        if (role === 'doctor') targetRoute = '/doctor';
-        else if (role === 'pharmacist') targetRoute = '/pharmacy';
+        try {
+          const supabase = getSupabaseClient();
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.access_token) {
+            const roleRes = await fetch('/api/branches', {
+              headers: { Authorization: `Bearer ${session.access_token}` },
+            });
+            const roleData = await roleRes.json();
+            const resolvedRole = (roleData.userRole || '').toLowerCase();
+            if (!roleData.isOwner) {
+              if (resolvedRole === 'receptionist') {
+                targetRoute = '/reception';
+              } else if (resolvedRole === 'pharmacist') {
+                targetRoute = '/pharmacy';
+              } else if (resolvedRole === 'doctor') {
+                targetRoute = '/doctor';
+              }
+            }
+          }
+        } catch (roleErr) {
+          console.warn('[Login Role Resolution]:', roleErr);
+        }
 
         setTimeout(() => {
-          // Use replace to eliminate /login from history stack (Case 4)
-          router.replace(targetRoute);
-        }, 1200);
+          // Full navigation replace to guarantee clean reload of all providers & caches
+          if (typeof window !== 'undefined') {
+            window.location.replace(targetRoute);
+          } else {
+            router.replace(targetRoute);
+          }
+        }, 600);
       }
     } catch (err: any) {
       setErrorMessage(err?.message || 'An unexpected login error occurred.');
@@ -99,11 +147,11 @@ export default function LoginPage() {
 
   if (checkingAuth) {
     return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
-        <div className="animate-pulse w-48 h-12 relative">
-          <Image src="/healthiva-logo.png" alt="Healthiva" fill className="object-contain" priority unoptimized />
-        </div>
-      </div>
+      <HealthivaScreenLoader
+        message="Verifying session..."
+        subMessage="Connecting to your Healthiva clinic workspace"
+        fullScreen
+      />
     );
   }
 
@@ -146,7 +194,9 @@ export default function LoginPage() {
 
           {loginSuccess ? (
             <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 text-center animate-fadeIn">
-              <div className="text-3xl mb-2">✅</div>
+              <div className="w-12 h-12 mx-auto mb-2 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                <CheckCircleIcon className="w-6 h-6" />
+              </div>
               <h3 className="text-emerald-900 font-bold text-sm mb-1">Login Successful!</h3>
               <p className="text-emerald-700 text-xs">
                 Welcome back, <strong>{loginSuccess.profile?.full_name || loginSuccess.user?.email}</strong>

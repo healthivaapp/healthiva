@@ -7,6 +7,13 @@ function getClient(): SupabaseClient {
     process.env.SUPABASE_URL ||
     'https://hhilecvljlzbrdyykpxo.supabase.co';
 
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (serviceRoleKey) {
+    return createClient(url, serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  }
+
   const anonKey =
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
     process.env.SUPABASE_ANON_KEY ||
@@ -36,9 +43,23 @@ export async function GET(request: Request) {
       });
 
       if (!rpcErr && rpcRes?.success && rpcRes.invitation) {
+        // Enrich RPC result with requiresAuthCode and orgAuthority from table
+        const { data: invRow } = await client
+          .from('staff_invitations')
+          .select('*')
+          .eq('invite_token', token)
+          .maybeSingle();
+
+        const hasCode = Boolean(invRow?.auth_code || rpcRes.invitation.requiresAuthCode);
+        const resolvedAuthority = invRow?.org_authority || rpcRes.invitation.orgAuthority || 'none';
+
         return NextResponse.json({
           success: true,
-          invitation: rpcRes.invitation,
+          invitation: {
+            ...rpcRes.invitation,
+            orgAuthority: resolvedAuthority,
+            requiresAuthCode: hasCode,
+          },
         });
       }
 
@@ -122,6 +143,8 @@ export async function GET(request: Request) {
         doctorRegNo: invitation.doctor_reg_no,
         specialty: invitation.specialty,
         expiresAt: invitation.expires_at,
+        orgAuthority: invitation.org_authority || 'none',
+        requiresAuthCode: Boolean(invitation.auth_code),
       },
     });
   } catch (err: any) {
@@ -134,7 +157,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { token, password } = body;
+    const { token, password, authCode } = body;
 
     if (!token?.trim()) {
       return NextResponse.json({ error: 'Invitation token is required.' }, { status: 400 });
@@ -142,10 +165,10 @@ export async function POST(request: Request) {
 
     const client = getClient();
 
-    // 1. Fetch pending invitation
+    // 1. Fetch pending invitation with role details
     const { data: invitation, error: invError } = await client
       .from('staff_invitations')
-      .select('*')
+      .select('*, role:roles(id, name, can_prescribe)')
       .eq('invite_token', token.trim())
       .eq('status', 'pending')
       .gt('expires_at', new Date().toISOString())
@@ -157,6 +180,17 @@ export async function POST(request: Request) {
         { error: 'This invitation is invalid, expired, or has already been accepted.' },
         { status: 400 }
       );
+    }
+
+    // Verify 6-digit email verification code if one was assigned
+    if (invitation.auth_code && String(invitation.auth_code).trim()) {
+      const cleanInputCode = authCode ? String(authCode).trim() : '';
+      if (!cleanInputCode || cleanInputCode !== String(invitation.auth_code).trim()) {
+        return NextResponse.json(
+          { error: 'Invalid or missing 6-digit email verification code. Please check your invitation email.' },
+          { status: 400 }
+        );
+      }
     }
 
     let targetUserId: string | null = null;
@@ -218,6 +252,8 @@ export async function POST(request: Request) {
               user_metadata: {
                 ...existing.user_metadata,
                 full_name: invitation.full_name,
+                name: invitation.full_name,
+                phone: invitation.mobile,
                 mobile: invitation.mobile,
               },
             });
@@ -250,7 +286,6 @@ export async function POST(request: Request) {
             if (!signInError && signInData?.user) {
               targetUserId = signInData.user.id;
             } else {
-              // Fetch user profile if existing
               const { data: prof } = await client
                 .from('profiles')
                 .select('id')
@@ -279,75 +314,201 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Failed to authenticate or create staff user.' }, { status: 400 });
     }
 
+    const targetAuthority = invitation.org_authority === 'administrator' ? 'administrator' : 'none';
+    const defaultClinicId =
+      Array.isArray(invitation.branch_ids) && invitation.branch_ids.length > 0
+        ? invitation.branch_ids[0]
+        : null;
+
     // 2. Call the atomic accept_staff_invitation RPC in PostgreSQL
+    let rpcSucceeded = false;
     const { data: rpcResult, error: rpcError } = await client.rpc('accept_staff_invitation', {
       p_invite_token: token.trim(),
       p_user_id: targetUserId,
+      p_auth_code: authCode ? String(authCode).trim() : null,
     });
 
-    if (rpcError || (rpcResult && rpcResult.success === false)) {
-      console.warn('[RPC accept_staff_invitation failed, falling back to direct linking]:', rpcError || rpcResult);
+    if (!rpcError && rpcResult && rpcResult.success === true) {
+      rpcSucceeded = true;
+    } else {
+      console.warn('[RPC accept_staff_invitation fallback triggered]:', rpcError || rpcResult);
+    }
 
-      // Direct fallback linking
-      await client
+    // 3. Ensure profile, membership, role, branch scopes, and invitation status are 100% synced
+    if (!rpcSucceeded) {
+      // A. Upsert profile with doctor_reg_no
+      const { error: profErr } = await client
         .from('profiles')
         .upsert({
           id: targetUserId,
           full_name: invitation.full_name,
-          email: invitation.email,
+          email: invitation.email.trim().toLowerCase(),
           mobile: invitation.mobile,
+          doctor_reg_no: invitation.doctor_reg_no || null,
         });
 
-      const { data: mem } = await client
+      if (profErr) {
+        console.error('[Profile upsert error in invite accept]:', profErr);
+      }
+
+      // B. Create or update membership
+      let membershipId: string | null = null;
+      const { data: existingMem } = await client
         .from('memberships')
-        .upsert({
-          organization_id: invitation.organization_id,
-          user_id: targetUserId,
-          status: 'active',
-          permission_mode: invitation.permission_mode || 'template',
-          custom_permissions: invitation.custom_permissions || null,
-        })
-        .select('id')
-        .single();
+        .select('id, is_primary_owner, org_authority')
+        .eq('organization_id', invitation.organization_id)
+        .eq('user_id', targetUserId)
+        .maybeSingle();
 
-      if (mem?.id) {
-        // Guardrail: Do not overwrite role if user is already an Owner
-        const { data: existingRoles } = await client
-          .from('membership_roles')
-          .select('role_id')
-          .eq('membership_id', mem.id);
+      if (!existingMem) {
+        const { data: insertedMem, error: memInsErr } = await client
+          .from('memberships')
+          .insert({
+            organization_id: invitation.organization_id,
+            user_id: targetUserId,
+            status: 'active',
+            org_authority: targetAuthority,
+            permission_mode: invitation.permission_mode || 'template',
+            custom_permissions: invitation.custom_permissions || null,
+            default_clinic_id: defaultClinicId,
+            joined_at: new Date().toISOString(),
+          })
+          .select('id')
+          .single();
 
-        const isOwnerAccount = existingRoles?.some((r) => r.role_id === '11111111-1111-1111-1111-111111111111');
-
-        if (!isOwnerAccount) {
-          await client
-            .from('membership_roles')
-            .upsert({
-              membership_id: mem.id,
-              role_id: invitation.role_id,
-            });
+        if (memInsErr || !insertedMem) {
+          console.error('[Membership insert error in invite accept]:', memInsErr);
+          return NextResponse.json(
+            { error: memInsErr?.message || 'Failed to provision clinic membership.' },
+            { status: 500 }
+          );
         }
+        membershipId = insertedMem.id;
+      } else {
+        membershipId = existingMem.id;
+        const resolvedAuth = existingMem.is_primary_owner ? 'primary_owner' : targetAuthority;
+        const { error: memUpdErr } = await client
+          .from('memberships')
+          .update({
+            status: 'active',
+            org_authority: resolvedAuth,
+            permission_mode: invitation.permission_mode || 'template',
+            custom_permissions: invitation.custom_permissions || null,
+            default_clinic_id: defaultClinicId,
+          })
+          .eq('id', existingMem.id);
 
-        if (Array.isArray(invitation.branch_ids)) {
-          for (const bId of invitation.branch_ids) {
-            await client.from('membership_clinic_scopes').upsert({
-              membership_id: mem.id,
-              clinic_id: bId,
-            });
+        // If BEFORE UPDATE trigger blocks org_authority change (pre-Migration 10), recreate non-primary membership row
+        if (memUpdErr && !existingMem.is_primary_owner) {
+          await client.from('membership_clinic_scopes').delete().eq('membership_id', existingMem.id);
+          await client.from('membership_roles').delete().eq('membership_id', existingMem.id);
+          await client.from('memberships').delete().eq('id', existingMem.id);
+
+          const { data: recreatedMem, error: recErr } = await client
+            .from('memberships')
+            .insert({
+              id: existingMem.id,
+              organization_id: invitation.organization_id,
+              user_id: targetUserId,
+              status: 'active',
+              org_authority: targetAuthority,
+              permission_mode: invitation.permission_mode || 'template',
+              custom_permissions: invitation.custom_permissions || null,
+              default_clinic_id: defaultClinicId,
+              joined_at: new Date().toISOString(),
+            })
+            .select('id')
+            .single();
+
+          if (!recErr && recreatedMem) {
+            membershipId = recreatedMem.id;
           }
         }
       }
 
-      await client
+      if (!membershipId) {
+        return NextResponse.json(
+          { error: 'Failed to link staff account to clinic organization.' },
+          { status: 500 }
+        );
+      }
+
+      // C. Assign role in membership_roles (protect Owner role if already an Owner)
+      const { data: existingRoles } = await client
+        .from('membership_roles')
+        .select('role_id')
+        .eq('membership_id', membershipId);
+
+      const isOwnerAccount = existingRoles?.some((r) => r.role_id === '11111111-1111-1111-1111-111111111111');
+
+      if (!isOwnerAccount && invitation.role_id) {
+        await client.from('membership_roles').delete().eq('membership_id', membershipId);
+        await client.from('membership_roles').insert({
+          membership_id: membershipId,
+          role_id: invitation.role_id,
+        });
+      }
+
+      // D. Assign branch scopes in membership_clinic_scopes
+      await client.from('membership_clinic_scopes').delete().eq('membership_id', membershipId);
+      if (Array.isArray(invitation.branch_ids) && invitation.branch_ids.length > 0) {
+        const scopeRows = invitation.branch_ids.map((bId: string) => ({
+          membership_id: membershipId,
+          clinic_id: bId,
+        }));
+        await client.from('membership_clinic_scopes').insert(scopeRows);
+      }
+
+      // E. Mark invitation accepted and clear auth_code (keep invite_token NOT NULL)
+      const updateAcceptedPayload: Record<string, any> = {
+        status: 'accepted',
+        updated_at: new Date().toISOString(),
+      };
+
+      const updRes = await client
         .from('staff_invitations')
-        .update({ status: 'accepted' })
+        .update({
+          ...updateAcceptedPayload,
+          auth_code: null,
+        })
         .eq('id', invitation.id);
+
+      if (
+        updRes.error &&
+        (updRes.error.message?.includes('auth_code') || updRes.error.message?.includes('schema cache'))
+      ) {
+        await client
+          .from('staff_invitations')
+          .update(updateAcceptedPayload)
+          .eq('id', invitation.id);
+      }
+    } else {
+      // Even when RPC succeeded, ensure doctor_reg_no is synced to profiles if present
+      if (invitation.doctor_reg_no) {
+        await client
+          .from('profiles')
+          .update({ doctor_reg_no: invitation.doctor_reg_no })
+          .eq('id', targetUserId);
+      }
+    }
+
+    // Determine role/authority-appropriate landing portal
+    const resolvedRoleName = ((invitation.role as any)?.name || '').toLowerCase();
+    let redirectUrl = '/dashboard';
+    if (targetAuthority !== 'administrator') {
+      if (resolvedRoleName === 'receptionist') {
+        redirectUrl = '/reception';
+      } else if (resolvedRoleName === 'pharmacist') {
+        redirectUrl = '/pharmacy';
+      } else if (resolvedRoleName === 'doctor') {
+        redirectUrl = '/doctor';
+      }
     }
 
     return NextResponse.json({
       success: true,
-      message: `Welcome to the team! You have successfully joined the clinic.`,
-      redirectUrl: '/dashboard',
+      message: 'Welcome to the team! You have successfully joined the clinic.',
+      redirectUrl,
     });
   } catch (err: any) {
     console.error('[API Invite POST Error]:', err);

@@ -48,6 +48,7 @@ export function PortalSidebar({ portal, activePath = 'dashboard' }: PortalSideba
     mobileSidebarOpen,
     setMobileSidebarOpen,
     hasPermission,
+    isOwner,
   } = useBranch();
 
   const pathname = usePathname() || '';
@@ -368,8 +369,8 @@ export function PortalSidebar({ portal, activePath = 'dashboard' }: PortalSideba
               );
             })}
 
-            {/* Owner Portal: Collapsible Settings Parent & Child Items */}
-            {portal === 'owner' && (
+            {/* Owner & Co-Owner: Collapsible Settings Parent & Child Items */}
+            {(portal === 'owner' || isOwner) && (
               <div className="pt-1 space-y-1">
                 <button
                   type="button"

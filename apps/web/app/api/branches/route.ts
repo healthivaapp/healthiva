@@ -86,12 +86,13 @@ async function resolveUserAndOrg(request: Request) {
   // Fetch user role
   const { data: memRole } = await client
     .from('membership_roles')
-    .select('role_id, role:roles(id, name, description)')
+    .select('role_id, role:roles(id, name, description, is_custom, can_prescribe)')
     .eq('membership_id', membership.id)
     .limit(1)
     .maybeSingle();
 
-  const roleName = ((memRole?.role as any)?.name || 'Owner').toLowerCase();
+  const roleObj = (memRole?.role as any) || null;
+  const roleName = (roleObj?.name || 'Owner').toLowerCase();
   const isOwner =
     membership.is_primary_owner === true ||
     membership.org_authority === 'primary_owner' ||
@@ -108,7 +109,7 @@ async function resolveUserAndOrg(request: Request) {
   // Fetch real user profile from public.profiles
   const { data: profile } = await client
     .from('profiles')
-    .select('id, full_name, mobile, email')
+    .select('id, full_name, mobile, email, doctor_reg_no')
     .eq('id', user.id)
     .maybeSingle();
 
@@ -123,86 +124,132 @@ async function resolveUserAndOrg(request: Request) {
 
   const roleOverrides = (orgSettings?.workflow_json as any)?.role_overrides || null;
 
-  // Resolve user permissions
-  const userPermissions = isOwnerOrAdmin
-    ? [...ALL_PERMISSIONS]
-    : resolveEffectivePermissions(
+  // Resolve user permissions (including organization_role_permissions replacement table & NMC invariant)
+  let userPermissions: string[] = [];
+  if (isOwnerOrAdmin) {
+    userPermissions = [...ALL_PERMISSIONS];
+  } else if (membership.permission_mode === 'custom' && Array.isArray(membership.custom_permissions)) {
+    userPermissions = resolveEffectivePermissions(
+      roleName,
+      'custom',
+      membership.custom_permissions,
+      roleOverrides
+    );
+  } else if (memRole?.role_id) {
+    const { data: orgRolePerms } = await client
+      .from('organization_role_permissions')
+      .select('permission:permissions(code)')
+      .eq('organization_id', membership.organization_id)
+      .eq('role_id', memRole.role_id);
+
+    if (orgRolePerms && orgRolePerms.length > 0) {
+      userPermissions = orgRolePerms.map((p: any) => p.permission?.code).filter(Boolean);
+    } else if (roleObj?.is_custom) {
+      const { data: defRolePerms } = await client
+        .from('role_permissions')
+        .select('permission:permissions(code)')
+        .eq('role_id', memRole.role_id);
+      userPermissions = (defRolePerms || []).map((p: any) => p.permission?.code).filter(Boolean);
+    } else {
+      userPermissions = resolveEffectivePermissions(
         roleName,
         membership.permission_mode as any,
         membership.custom_permissions,
         roleOverrides
       );
-
-  return {
-    client,
-    user,
-    profile,
-    membership,
-    isOwner: isOwnerOrAdmin,
-    isPrimaryOwner: isOwner,
-    userRole: roleName,
-    userPermissions,
-    organizationId: membership.organization_id,
-    organizationName: org?.name || 'My Clinic',
-    specialty: orgSettings?.specialty_template || 'general_opd',
-    logoUrl,
-  };
-}
-
-// GET: Fetch all branches for user's organization
-export async function GET(request: Request) {
-  try {
-    const authResult = await resolveUserAndOrg(request);
-    if ('error' in authResult) {
-      return NextResponse.json(
-        {
-          error: authResult.error,
-          isSuspended: Boolean((authResult as any).isSuspended),
-        },
-        { status: authResult.status || 400 }
-      );
     }
+  } else {
+    userPermissions = resolveEffectivePermissions(
+      roleName,
+      membership.permission_mode as any,
+      membership.custom_permissions,
+      roleOverrides
+    );
+  }
 
-    const { client, isOwner, userRole, userPermissions, organizationId, organizationName, membership } = authResult;
-
-    const { data: branches, error: fetchError } = await client
-      .from('clinics')
-      .select('*')
-      .eq('organization_id', organizationId)
-      .order('created_at', { ascending: true });
-
-    if (fetchError) {
-      return NextResponse.json({ error: getFriendlyErrorMessage(fetchError) }, { status: 400 });
+  // Enforce NMC Medical Prescribing Invariant for non-Primary-Owner users
+  if (!isOwner) {
+    const canPrescribe = Boolean(roleObj?.can_prescribe) && Boolean(profile?.doctor_reg_no?.trim());
+    if (!canPrescribe) {
+      userPermissions = userPermissions.filter((p) => p !== 'visits.sign');
     }
+  }
 
-    let scopedBranches = branches || [];
-    // If not owner, filter by membership_clinic_scopes if defined
-    if (!isOwner && membership?.id) {
-      const { data: scopes } = await client
-        .from('membership_clinic_scopes')
-        .select('clinic_id')
-        .eq('membership_id', membership.id);
-
-      if (scopes && scopes.length > 0) {
-        const allowedIds = new Set(scopes.map((s: any) => s.clinic_id));
-        scopedBranches = scopedBranches.filter((b: any) => allowedIds.has(b.id));
-      }
-    }
-
-    return NextResponse.json({
-      success: true,
-      branches: scopedBranches,
-      allBranches: branches || [],
-      isOwner,
-      userRole,
+    return {
+      client,
+      user,
+      profile,
+      membership,
+      isOwner: isOwnerOrAdmin,
+      isPrimaryOwner: isOwner,
+      isAdministrator: membership.org_authority === 'administrator',
+      orgAuthority: membership.org_authority || (membership.is_primary_owner ? 'primary_owner' : 'none'),
+      userRole: roleName,
       userPermissions,
-      organizationId,
-      organizationName,
-      defaultClinicId: membership?.default_clinic_id || null,
-      logoUrl: authResult.logoUrl,
-      profile: authResult.profile,
-      specialty: authResult.specialty,
-    });
+      organizationId: membership.organization_id,
+      organizationName: org?.name || 'My Clinic',
+      specialty: orgSettings?.specialty_template || 'general_opd',
+      logoUrl,
+    };
+  }
+
+  // GET: Fetch all branches for user's organization
+  export async function GET(request: Request) {
+    try {
+      const authResult = await resolveUserAndOrg(request);
+      if ('error' in authResult) {
+        return NextResponse.json(
+          {
+            error: authResult.error,
+            isSuspended: Boolean((authResult as any).isSuspended),
+          },
+          { status: authResult.status || 400 }
+        );
+      }
+
+      const { client, isOwner, userRole, userPermissions, organizationId, organizationName, membership } = authResult;
+
+      const { data: branches, error: fetchError } = await client
+        .from('clinics')
+        .select('*')
+        .eq('organization_id', organizationId)
+        .order('created_at', { ascending: true });
+
+      if (fetchError) {
+        return NextResponse.json({ error: getFriendlyErrorMessage(fetchError) }, { status: 400 });
+      }
+
+      let scopedBranches = branches || [];
+      // If not owner, filter by membership_clinic_scopes if defined
+      if (!isOwner && membership?.id) {
+        const { data: scopes } = await client
+          .from('membership_clinic_scopes')
+          .select('clinic_id')
+          .eq('membership_id', membership.id);
+
+        if (scopes && scopes.length > 0) {
+          const allowedIds = new Set(scopes.map((s: any) => s.clinic_id));
+          scopedBranches = scopedBranches.filter((b: any) => allowedIds.has(b.id));
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        branches: scopedBranches,
+        allBranches: branches || [],
+        isOwner,
+        isPrimaryOwner: authResult.isPrimaryOwner,
+        isAdministrator: authResult.isAdministrator,
+        orgAuthority: authResult.orgAuthority,
+        userRole,
+        userPermissions,
+        organizationId,
+        organizationName,
+        defaultClinicId: membership?.default_clinic_id || null,
+        logoUrl: authResult.logoUrl,
+        profile: authResult.profile,
+        specialty: authResult.specialty,
+      });
   } catch (err: any) {
     console.error('[API Branches GET error]:', err);
     return NextResponse.json({ error: getFriendlyErrorMessage(err) }, { status: 500 });
@@ -249,8 +296,8 @@ export async function POST(request: Request) {
         address: address?.trim() || null,
         phone: phone?.trim() || null,
         email: email?.trim() || null,
-        city: city?.trim() || 'Surat',
-        state: state?.trim() || 'Gujarat',
+        city: city?.trim() || null,
+        state: state?.trim() || null,
         pincode: pincode?.trim() || null,
         is_active: is_active !== undefined ? Boolean(is_active) : true,
       })
@@ -312,8 +359,8 @@ export async function PUT(request: Request) {
     if (address !== undefined) updatePayload.address = address?.trim() || null;
     if (phone !== undefined) updatePayload.phone = phone?.trim() || null;
     if (email !== undefined) updatePayload.email = email?.trim() || null;
-    if (city !== undefined) updatePayload.city = city?.trim() || 'Surat';
-    if (state !== undefined) updatePayload.state = state?.trim() || 'Gujarat';
+    if (city !== undefined) updatePayload.city = city?.trim() || null;
+    if (state !== undefined) updatePayload.state = state?.trim() || null;
     if (pincode !== undefined) updatePayload.pincode = pincode?.trim() || null;
     if (is_active !== undefined) updatePayload.is_active = Boolean(is_active);
 

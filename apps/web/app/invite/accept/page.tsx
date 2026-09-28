@@ -13,6 +13,9 @@ import {
   PillIcon,
   BuildingIcon,
   LockIcon,
+  EyeIcon,
+  EyeOffIcon,
+  ShieldCheckIcon,
 } from '../../../components/icons';
 
 interface InvitationDetails {
@@ -26,6 +29,8 @@ interface InvitationDetails {
   branches: string[];
   doctorRegNo?: string | null;
   specialty?: string | null;
+  orgAuthority?: string | null;
+  requiresAuthCode?: boolean;
 }
 
 function AcceptInviteContent() {
@@ -39,8 +44,11 @@ function AcceptInviteContent() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  const [authCode, setAuthCode] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   useEffect(() => {
     async function loadInvitation() {
@@ -74,6 +82,13 @@ function AcceptInviteContent() {
     e.preventDefault();
     if (!token) return;
 
+    // Validate 6-digit verification code if required
+    const needsCode = invitation?.requiresAuthCode ?? true;
+    if (needsCode && (!authCode || authCode.trim().length !== 6)) {
+      setErrorMessage('Please enter the 6-digit verification code sent to your email.');
+      return;
+    }
+
     if (password.length < 8) {
       setErrorMessage('Password must be at least 8 characters long.');
       return;
@@ -91,7 +106,11 @@ function AcceptInviteContent() {
       const res = await fetch('/api/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, password }),
+        body: JSON.stringify({
+          token,
+          password,
+          authCode: authCode.trim() || undefined,
+        }),
       });
 
       const data = await res.json();
@@ -106,236 +125,376 @@ function AcceptInviteContent() {
       const supabase = getSupabaseClient();
       if (invitation?.email) {
         await supabase.auth.signInWithPassword({
-          email: invitation.email,
-          password,
+          email: invitation.email.trim().toLowerCase(),
+          password: password.trim(),
         });
       }
 
+      const targetRedirect = data.redirectUrl || '/dashboard';
       setTimeout(() => {
-        router.push(data.redirectUrl || '/dashboard');
-      }, 1000);
+        if (typeof window !== 'undefined') {
+          window.location.replace(targetRedirect);
+        } else {
+          router.replace(targetRedirect);
+        }
+      }, 600);
     } catch (err: any) {
       setErrorMessage(err?.message || 'Error accepting invitation.');
       setSubmitting(false);
     }
   };
 
+  const getRoleIcon = (roleName: string) => {
+    const r = roleName.toLowerCase();
+    if (r === 'doctor') return StethoscopeIcon;
+    if (r === 'receptionist') return MonitorIcon;
+    return PillIcon;
+  };
+
+  const getRoleBadgeClasses = (roleName: string) => {
+    const r = roleName.toLowerCase();
+    if (r === 'doctor') return 'bg-sky-50 text-[#009fe3] border-sky-200';
+    if (r === 'receptionist') return 'bg-purple-50 text-purple-700 border-purple-200';
+    return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 via-slate-50 to-sky-50/30 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
-      <div className="sm:mx-auto sm:w-full sm:max-w-md text-center px-4">
-        {/* Clinic Official Logo or Fallback */}
-        <div className="flex flex-col items-center justify-center mb-6">
-          {invitation?.logoUrl ? (
-            <div className="relative h-14 w-48 mb-2">
+    <div className="min-h-screen bg-[#f8fbfe] font-sans selection:bg-[#009fe3] selection:text-white flex flex-col justify-center py-10 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-4xl mx-auto w-full space-y-6">
+        {/* Top Healthiva Minimal Header */}
+        <div className="flex items-center justify-between px-2">
+          <div className="flex items-center gap-2">
+            <div className="relative w-8 h-8 rounded-xl bg-white border border-slate-200/80 p-1.5 shadow-2xs">
               <Image
-                src={invitation.logoUrl}
-                alt={invitation.organizationName}
+                src="/healthiva-icon.png"
+                alt="Healthiva"
                 fill
-                className="object-contain object-center"
+                className="object-contain p-1"
                 priority
                 unoptimized
               />
             </div>
-          ) : (
-            <div className="inline-flex items-center gap-2.5 mb-2">
-              <div className="w-11 h-11 rounded-xl bg-[#009fe3] text-white flex items-center justify-center font-black text-xl shadow-sm">
-                +
-              </div>
-              <span className="text-2xl font-black tracking-tight text-slate-900">
-                {invitation?.organizationName || 'HEALTHIVA'}
-              </span>
-            </div>
-          )}
-          <span className="text-[10px] font-bold tracking-wider text-slate-400 uppercase">
-            Healthiva Clinic Team Portal
+            <span className="text-sm font-extrabold text-slate-800 tracking-tight">Healthiva</span>
+          </div>
+          <span className="text-[11px] font-bold tracking-wider text-slate-400 uppercase">
+            Official Staff Portal
           </span>
         </div>
 
-        <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-          Join {invitation?.organizationName || 'Clinic Team'}
-        </h1>
-        <p className="mt-1.5 text-xs sm:text-sm text-slate-500">
-          Complete your profile and set up your staff login credentials.
-        </p>
-      </div>
-
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-lg px-4 sm:px-0">
-        <div className="bg-white py-8 px-6 sm:px-10 shadow-sm border border-slate-200/80 rounded-2xl">
-          {loading ? (
-            <div className="py-12 text-center text-slate-400 text-sm font-medium animate-pulse">
-              Verifying clinic invitation...
+        {/* Loading State */}
+        {loading ? (
+          <div className="bg-white rounded-3xl border border-slate-200/80 p-16 shadow-2xs flex flex-col items-center justify-center text-center">
+            <div className="relative w-16 h-16 rounded-2xl bg-white border border-slate-100 shadow-md flex items-center justify-center p-3 mb-4">
+              <Image
+                src="/healthiva-icon.png"
+                alt="Healthiva"
+                fill
+                className="object-contain p-2"
+                priority
+                unoptimized
+              />
             </div>
-          ) : errorMessage && !invitation ? (
-            <div className="text-center py-6">
-              <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-4">
-                <AlertTriangleIcon className="w-6 h-6" />
-              </div>
-              <h2 className="text-base font-bold text-slate-900 mb-1">Invitation Link Error</h2>
-              <p className="text-xs sm:text-sm text-slate-600 mb-6">{errorMessage}</p>
-              <Link
-                href="/login"
-                className="inline-flex items-center justify-center px-5 py-2.5 rounded-xl bg-slate-900 text-white text-xs sm:text-sm font-bold hover:bg-slate-800 transition-colors"
-              >
-                Go to Sign In
-              </Link>
+            <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-[#009fe3] mb-3" />
+            <div className="text-xs font-semibold text-slate-500">
+              Validating clinic invitation token...
             </div>
-          ) : invitation ? (
-            <div>
-              {/* Clinic Invitation Card */}
-              <div className="mb-6 p-4 rounded-xl bg-sky-50/60 border border-sky-100 flex items-start gap-3.5">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                  invitation.roleName.toLowerCase() === 'doctor'
-                    ? 'bg-sky-100 text-[#009fe3]'
-                    : invitation.roleName.toLowerCase() === 'receptionist'
-                    ? 'bg-purple-100 text-purple-600'
-                    : 'bg-emerald-100 text-emerald-600'
-                }`}>
-                  {invitation.roleName.toLowerCase() === 'doctor' ? (
-                    <StethoscopeIcon className="w-5 h-5" />
-                  ) : invitation.roleName.toLowerCase() === 'receptionist' ? (
-                    <MonitorIcon className="w-5 h-5" />
+          </div>
+        ) : errorMessage && !invitation ? (
+          /* Error State */
+          <div className="bg-white rounded-3xl border border-slate-200/80 p-12 text-center shadow-2xs max-w-md mx-auto">
+            <div className="w-14 h-14 rounded-2xl bg-rose-50 text-rose-600 border border-rose-100 flex items-center justify-center mx-auto mb-4">
+              <AlertTriangleIcon className="w-7 h-7" />
+            </div>
+            <h2 className="text-lg font-extrabold text-slate-900 tracking-tight mb-1.5">
+              Invitation Link Expired or Invalid
+            </h2>
+            <p className="text-xs text-slate-500 leading-relaxed mb-6">
+              {errorMessage}
+            </p>
+            <Link
+              href="/login"
+              className="inline-flex items-center justify-center w-full bg-[#009fe3] hover:bg-[#008bc7] text-white text-xs font-bold py-3 rounded-xl transition-colors cursor-pointer shadow-none"
+            >
+              Return to Staff Login
+            </Link>
+          </div>
+        ) : invitation ? (
+          <>
+            {/* ================================================================= */}
+            {/* 1. HORIZONTAL CLINIC INVITATION CARD (Header Banner)              */}
+            {/* ================================================================= */}
+            <div className="bg-white rounded-3xl border border-slate-200/80 p-6 sm:p-7 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-5">
+              <div className="flex items-center gap-4 min-w-0">
+                {/* Official Clinic Logo / Brand Mark */}
+                <div className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-center p-2 shrink-0 overflow-hidden shadow-2xs">
+                  {invitation.logoUrl ? (
+                    <Image
+                      src={invitation.logoUrl}
+                      alt={invitation.organizationName}
+                      fill
+                      className="object-contain p-1.5"
+                      priority
+                      unoptimized
+                    />
                   ) : (
-                    <PillIcon className="w-5 h-5" />
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-[#009fe3]">
-                    Official Staff Invitation
-                  </span>
-                  <h3 className="text-base font-extrabold text-slate-900 truncate">
-                    {invitation.organizationName}
-                  </h3>
-                  <p className="text-xs text-slate-700 mt-0.5">
-                    Invited as:{' '}
-                    <strong className="text-slate-900 font-bold bg-white px-2 py-0.5 rounded border border-slate-200">
-                      {invitation.roleName}
-                    </strong>
-                    {invitation.specialty ? ` • ${invitation.specialty}` : ''}
-                  </p>
-                  {invitation.branches.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {invitation.branches.map((bName, idx) => (
-                        <span
-                          key={idx}
-                          className="inline-flex items-center gap-1 text-[11px] font-medium bg-white text-slate-700 px-2 py-0.5 rounded-md border border-slate-200"
-                        >
-                          <BuildingIcon className="w-3 h-3 text-slate-400" />
-                          <span>{bName}</span>
-                        </span>
-                      ))}
+                    <div className="w-full h-full rounded-xl bg-gradient-to-tr from-[#042451] to-[#009fe3] text-white flex items-center justify-center font-extrabold text-xl">
+                      {invitation.organizationName.charAt(0).toUpperCase()}
                     </div>
                   )}
                 </div>
+
+                {/* Organization Details */}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#009fe3] bg-sky-50 px-2 py-0.5 rounded-full border border-sky-100">
+                      Official Clinic Invitation
+                    </span>
+                  </div>
+                  <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight truncate mt-1">
+                    {invitation.organizationName}
+                  </h2>
+                  <p className="text-xs text-slate-500 truncate mt-0.5">
+                    {invitation.roleDescription || 'Join the official clinical care team.'}
+                  </p>
+                </div>
               </div>
 
-              {/* Error / Success Banners */}
-              {errorMessage && (
-                <div className="mb-5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
-                  <AlertTriangleIcon className="w-4 h-4 shrink-0 text-rose-600" />
-                  <span>{errorMessage}</span>
-                </div>
-              )}
+              {/* Badges & Assigned Scopes (Horizontal Right Block) */}
+              <div className="flex flex-wrap md:flex-col md:items-end gap-2 shrink-0 border-t md:border-t-0 pt-3 md:pt-0 border-slate-100">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {/* Role Badge */}
+                  {(() => {
+                    const RoleIcon = getRoleIcon(invitation.roleName);
+                    return (
+                      <span className={`inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-xl border shadow-2xs ${getRoleBadgeClasses(invitation.roleName)}`}>
+                        <RoleIcon className="w-3.5 h-3.5" />
+                        <span>{invitation.roleName}</span>
+                      </span>
+                    );
+                  })()}
 
-              {successMessage && (
-                <div className="mb-5 p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2">
-                  <CheckCircleIcon className="w-4 h-4 shrink-0 text-emerald-600" />
-                  <span>{successMessage}</span>
-                </div>
-              )}
-
-              {/* Form */}
-              <form onSubmit={handleAccept} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Your Full Name
-                  </label>
-                  <input
-                    type="text"
-                    disabled
-                    value={invitation.fullName}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-100 text-slate-700 text-sm font-medium cursor-not-allowed"
-                  />
+                  {/* Co-Owner Governance Badge */}
+                  {invitation.orgAuthority === 'administrator' && (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-xl bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-2xs">
+                      <ShieldCheckIcon className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Co-Owner (Administrator)</span>
+                    </span>
+                  )}
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                      Mobile Number
-                    </label>
-                    <input
-                      type="text"
-                      disabled
-                      value={invitation.mobile}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-100 text-slate-700 text-sm font-medium cursor-not-allowed"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                      Email Address
-                    </label>
-                    <input
-                      type="text"
-                      disabled
-                      value={invitation.email}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-100 text-slate-700 text-sm font-medium cursor-not-allowed"
-                    />
-                  </div>
-                </div>
-
-                {invitation.doctorRegNo && (
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                      Medical Registration Number
-                    </label>
-                    <input
-                      type="text"
-                      disabled
-                      value={invitation.doctorRegNo}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-100 text-slate-700 text-sm font-medium cursor-not-allowed"
-                    />
+                {/* Branch Scope Chips */}
+                {invitation.branches.length > 0 && (
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {invitation.branches.map((bName, idx) => (
+                      <span
+                        key={idx}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold bg-slate-50 text-slate-600 px-2.5 py-0.5 rounded-lg border border-slate-200/80"
+                      >
+                        <BuildingIcon className="w-3 h-3 text-slate-400" />
+                        <span>{bName}</span>
+                      </span>
+                    ))}
                   </div>
                 )}
-
-                <div className="border-t border-slate-100 pt-4 mt-2">
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Create Login Password *
-                  </label>
-                  <input
-                    type="password"
-                    required
-                    placeholder="At least 8 characters"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm font-medium focus:ring-2 focus:ring-[#009fe3]/20 focus:border-[#009fe3] outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Confirm Password *
-                  </label>
-                  <input
-                    type="password"
-                    required
-                    placeholder="Re-enter password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm font-medium focus:ring-2 focus:ring-[#009fe3]/20 focus:border-[#009fe3] outline-none"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="w-full mt-4 flex items-center justify-center gap-2 bg-[#009fe3] hover:bg-[#008bc7] text-white py-3 px-4 rounded-xl text-sm font-bold transition-colors cursor-pointer shadow-sm disabled:opacity-50"
-                >
-                  <LockIcon className="w-4 h-4" />
-                  <span>{submitting ? 'Setting up account...' : 'Accept Invitation & Join Clinic'}</span>
-                </button>
-              </form>
+              </div>
             </div>
-          ) : null}
-        </div>
+
+            {/* ================================================================= */}
+            {/* 2. HORIZONTAL 2-COLUMN ACTIVATION CARD                            */}
+            {/* ================================================================= */}
+            <div className="bg-white rounded-3xl border border-slate-200/80 p-6 sm:p-8 shadow-2xs">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                {/* LEFT COLUMN: Verified Staff Profile Information */}
+                <div className="lg:col-span-5 space-y-4 lg:border-r lg:border-slate-100 lg:pr-8">
+                  <div>
+                    <h3 className="text-sm font-extrabold text-slate-900 tracking-tight">
+                      Staff Member Details
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Your identity as verified by the clinic owner
+                    </p>
+                  </div>
+
+                  <div className="space-y-3 bg-slate-50/80 p-4 rounded-2xl border border-slate-100">
+                    <div>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                        Full Name
+                      </span>
+                      <span className="text-xs sm:text-sm font-extrabold text-slate-800">
+                        {invitation.fullName}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-200/60">
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                          Mobile Number
+                        </span>
+                        <span className="text-xs font-bold text-slate-700">
+                          {invitation.mobile || '—'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                          Email Address
+                        </span>
+                        <span className="text-xs font-bold text-slate-700 truncate block" title={invitation.email}>
+                          {invitation.email}
+                        </span>
+                      </div>
+                    </div>
+
+                    {invitation.doctorRegNo && (
+                      <div className="pt-2 border-t border-slate-200/60">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                          NMC Medical Registration
+                        </span>
+                        <span className="text-xs font-bold text-slate-700">
+                          {invitation.doctorRegNo}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Security Assurance Card */}
+                  <div className="p-3.5 rounded-2xl bg-sky-50/60 border border-sky-100 flex items-start gap-3">
+                    <ShieldCheckIcon className="w-5 h-5 text-[#009fe3] shrink-0 mt-0.5" />
+                    <div className="text-[11px] text-slate-600 leading-relaxed">
+                      <strong className="text-slate-900 font-bold block mb-0.5">2-Factor Security Verification</strong>
+                      Enter the 6-digit verification code sent to your email to verify your ownership of this staff profile.
+                    </div>
+                  </div>
+                </div>
+
+                {/* RIGHT COLUMN: Verification Code & Password Form */}
+                <div className="lg:col-span-7 space-y-5">
+                  <div>
+                    <h3 className="text-sm font-extrabold text-slate-900 tracking-tight">
+                      Account Activation
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Verify your security code and create your secure password
+                    </p>
+                  </div>
+
+                  {/* Error & Success Feedback Banners */}
+                  {errorMessage && (
+                    <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2 animate-in fade-in duration-150">
+                      <AlertTriangleIcon className="w-4 h-4 shrink-0 text-rose-600" />
+                      <span>{errorMessage}</span>
+                    </div>
+                  )}
+
+                  {successMessage && (
+                    <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2 animate-in fade-in duration-150">
+                      <CheckCircleIcon className="w-4 h-4 shrink-0 text-emerald-600" />
+                      <span>{successMessage}</span>
+                    </div>
+                  )}
+
+                  <form onSubmit={handleAccept} className="space-y-4" autoComplete="off">
+                    {/* ========================================================= */}
+                    {/* PROMINENT 6-DIGIT EMAIL VERIFICATION CODE FIELD          */}
+                    {/* ========================================================= */}
+                    <div className="p-4 rounded-2xl bg-sky-50/70 border-2 border-sky-200 shadow-2xs space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-extrabold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                          <LockIcon className="w-3.5 h-3.5 text-[#009fe3]" />
+                          <span>6-Digit Verification Code *</span>
+                        </label>
+                        <span className="text-[10px] font-bold text-[#009fe3] bg-white px-2 py-0.5 rounded-md border border-sky-200">
+                          From Email
+                        </span>
+                      </div>
+
+                      <div className="relative">
+                        <input
+                          type="text"
+                          required
+                          maxLength={6}
+                          autoComplete="one-time-code"
+                          placeholder="• • • • • •"
+                          value={authCode}
+                          onChange={(e) => setAuthCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                          className="w-full px-4 py-3 rounded-xl border border-sky-300 bg-white text-slate-900 font-mono text-xl font-black tracking-[0.4em] text-center focus:ring-4 focus:ring-[#009fe3]/15 focus:border-[#009fe3] outline-none shadow-xs transition-all"
+                        />
+                      </div>
+
+                      <p className="text-[11px] text-slate-500">
+                        Enter the 6-digit code sent to <strong className="text-slate-800 font-semibold">{invitation.email}</strong>
+                      </p>
+                    </div>
+
+                    {/* Password Fields */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                          Create Password *
+                        </label>
+                        <div className="relative">
+                          <input
+                            type={showPassword ? 'text' : 'password'}
+                            required
+                            minLength={8}
+                            autoComplete="new-password"
+                            placeholder="Min. 8 characters"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            className="w-full pl-3.5 pr-10 py-2.5 rounded-xl border border-slate-200 bg-slate-50/60 focus:bg-white text-slate-900 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-[#009fe3]/20 focus:border-[#009fe3] outline-none transition-all"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 cursor-pointer transition-colors"
+                            title={showPassword ? 'Hide password' : 'Show password'}
+                          >
+                            {showPassword ? <EyeOffIcon className="w-4 h-4" /> : <EyeIcon className="w-4 h-4" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                          Confirm Password *
+                        </label>
+                        <div className="relative">
+                          <input
+                            type={showConfirmPassword ? 'text' : 'password'}
+                            required
+                            minLength={8}
+                            autoComplete="new-password"
+                            placeholder="Re-enter password"
+                            value={confirmPassword}
+                            onChange={(e) => setConfirmPassword(e.target.value)}
+                            className="w-full pl-3.5 pr-10 py-2.5 rounded-xl border border-slate-200 bg-slate-50/60 focus:bg-white text-slate-900 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-[#009fe3]/20 focus:border-[#009fe3] outline-none transition-all"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 cursor-pointer transition-colors"
+                            title={showConfirmPassword ? 'Hide password' : 'Show password'}
+                          >
+                            {showConfirmPassword ? <EyeOffIcon className="w-4 h-4" /> : <EyeIcon className="w-4 h-4" />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Action Button */}
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      className="w-full mt-2 flex items-center justify-center gap-2 bg-[#009fe3] hover:bg-[#008bc7] text-white py-3.5 px-4 rounded-xl text-xs sm:text-sm font-extrabold transition-all cursor-pointer shadow-xs hover:shadow-md disabled:opacity-50"
+                    >
+                      <LockIcon className="w-4 h-4" />
+                      <span>{submitting ? 'Activating your account...' : 'Accept Invitation & Join Clinic'}</span>
+                    </button>
+                  </form>
+                </div>
+              </div>
+            </div>
+          </>
+        ) : null}
       </div>
     </div>
   );

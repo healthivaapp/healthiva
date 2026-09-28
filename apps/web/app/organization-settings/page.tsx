@@ -296,25 +296,29 @@ function OrganizationSettingsContent() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#f8fbfe] flex flex-col items-center justify-center font-sans">
-        <div className="relative w-48 h-12 mb-4 animate-pulse">
-          <Image
-            src="/healthiva-logo.png"
-            alt="Healthiva"
-            fill
-            className="object-contain"
-            priority
-            unoptimized
-          />
+      <SettingsLayout
+        user={user}
+        activeTab="branding"
+        title="Clinic Branding, Fees & Modules"
+        description="Configure clinic logo, consultation fees, token rules, and active modules."
+      >
+        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xs p-12 flex flex-col items-center justify-center text-center">
+          <div className="relative w-16 h-16 rounded-2xl bg-white border border-slate-100 shadow-md flex items-center justify-center p-3 mb-4">
+            <Image
+              src="/healthiva-icon.png"
+              alt="Healthiva"
+              fill
+              className="object-contain p-2"
+              priority
+              unoptimized
+            />
+          </div>
+          <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-[#009fe3] mb-3" />
+          <div className="text-xs font-semibold text-slate-500">
+            Loading clinic configurations...
+          </div>
         </div>
-        <div className="flex items-center gap-2 text-slate-500 text-sm font-medium">
-          <svg className="animate-spin h-5 w-5 text-[#009fe3]" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-          </svg>
-          <span>Loading clinic configurations...</span>
-        </div>
-      </div>
+      </SettingsLayout>
     );
   }
 
@@ -990,33 +994,31 @@ function OrganizationSettingsContent() {
 
 export default function OrganizationSettingsPage() {
   return (
-    <OwnerRouteGuard>
-      <Suspense
-        fallback={
-          <div className="min-h-screen bg-[#f8fbfe] flex flex-col items-center justify-center font-sans">
-            <div className="relative w-48 h-12 mb-4 animate-pulse">
-              <Image
-                src="/healthiva-logo.png"
-                alt="Healthiva"
-                fill
-                className="object-contain"
-                priority
-                unoptimized
-              />
-            </div>
-            <div className="flex items-center gap-2 text-slate-500 text-sm font-medium">
-              <svg className="animate-spin h-5 w-5 text-[#009fe3]" viewBox="0 0 24 24" fill="none">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-              </svg>
-              <span>Loading clinic settings...</span>
-            </div>
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[#f8fbfe] flex flex-col items-center justify-center font-sans">
+          <div className="relative w-48 h-12 mb-4 animate-pulse">
+            <Image
+              src="/healthiva-logo.png"
+              alt="Healthiva"
+              fill
+              className="object-contain"
+              priority
+              unoptimized
+            />
           </div>
-        }
-      >
-        <OrganizationSettingsContent />
-      </Suspense>
-    </OwnerRouteGuard>
+          <div className="flex items-center gap-2 text-slate-500 text-sm font-medium">
+            <svg className="animate-spin h-5 w-5 text-[#009fe3]" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            <span>Loading clinic settings...</span>
+          </div>
+        </div>
+      }
+    >
+      <OrganizationSettingsContent />
+    </Suspense>
   );
 }
 

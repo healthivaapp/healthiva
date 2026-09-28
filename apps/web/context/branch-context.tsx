@@ -40,17 +40,19 @@ export function formatSpecialtyTitle(raw?: string | null): string {
   return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
-export type SystemRole = 'owner' | 'doctor' | 'receptionist' | 'pharmacist';
+export type SystemRole = 'owner' | 'doctor' | 'receptionist' | 'pharmacist' | string;
 export type AppMode = 'doctor' | 'owner';
 
 interface BranchContextType {
   branches: Branch[];
   activeBranch: Branch | null;
   setActiveBranch: (branch: Branch) => void;
-  refreshBranches: () => Promise<void>;
+  refreshBranches: (isSilent?: boolean) => Promise<void>;
   loading: boolean;
   isOwner: boolean;
   isPrimaryOwner: boolean;
+  isAdministrator: boolean;
+  orgAuthority: string;
   userRole: SystemRole;
   userPermissions: string[];
   hasPermission: (key: string) => boolean;
@@ -79,9 +81,11 @@ export function BranchProvider({ children }: { children: React.ReactNode }) {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [activeBranch, setActiveBranchState] = useState<Branch | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [isOwner, setIsOwner] = useState<boolean>(true); // Default true during initial owner provisioning
-  const [isPrimaryOwner, setIsPrimaryOwner] = useState<boolean>(true);
-  const [userRole, setUserRole] = useState<SystemRole>('owner');
+  const [isOwner, setIsOwner] = useState<boolean>(false);
+  const [isPrimaryOwner, setIsPrimaryOwner] = useState<boolean>(false);
+  const [isAdministrator, setIsAdministrator] = useState<boolean>(false);
+  const [orgAuthority, setOrgAuthority] = useState<string>('none');
+  const [userRole, setUserRole] = useState<SystemRole>('doctor');
   const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [mode, setModeState] = useState<AppMode>('owner');
 
@@ -90,10 +94,11 @@ export function BranchProvider({ children }: { children: React.ReactNode }) {
 
   const hasPermission = useCallback(
     (key: string): boolean => {
-      if (isOwner) return true;
+      if (isPrimaryOwner) return true;
+      if (isOwner && key !== 'visits.sign') return true;
       return userPermissions.includes(key);
     },
-    [isOwner, userPermissions]
+    [isOwner, isPrimaryOwner, userPermissions]
   );
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -137,14 +142,35 @@ export function BranchProvider({ children }: { children: React.ReactNode }) {
     setSidebarCollapsed(next);
   };
 
+  // Track whether initial clinic hydration has completed for the current user so tab switches never flash full-screen loaders
+  const hasHydratedRef = React.useRef<boolean>(false);
+  const hydratedUserIdRef = React.useRef<string | null>(null);
+
   // Load user role, operating mode, and branches
-  const refreshBranches = useCallback(async () => {
+  const refreshBranches = useCallback(async (isSilent = false) => {
+    const shouldShowLoader = !isSilent && !hasHydratedRef.current;
     try {
+      if (shouldShowLoader) {
+        setLoading(true);
+      }
       const user = await getCurrentUser();
       if (!user) {
+        hasHydratedRef.current = false;
+        hydratedUserIdRef.current = null;
+        setBranches([]);
+        setActiveBranchState(null);
+        setCurrentUser(null);
+        setUserProfile(null);
         setLoading(false);
         return;
       }
+
+      // If a different user logged in without page reload, show loader for the new user's initial hydration
+      if (hydratedUserIdRef.current && hydratedUserIdRef.current !== user.id && !isSilent) {
+        hasHydratedRef.current = false;
+        setLoading(true);
+      }
+
       setCurrentUser(user);
 
       const supabase = getSupabaseClient();
@@ -165,6 +191,8 @@ export function BranchProvider({ children }: { children: React.ReactNode }) {
       const data = await res.json();
 
         if (data.isSuspended) {
+          hasHydratedRef.current = true;
+          hydratedUserIdRef.current = user.id;
           setIsSuspended(true);
           setSuspendedReason(data.error || 'Your staff account has been suspended by the clinic owner.');
           setLoading(false);
@@ -175,14 +203,20 @@ export function BranchProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (data.success && Array.isArray(data.branches)) {
+          hasHydratedRef.current = true;
+          hydratedUserIdRef.current = user.id;
           setBranches(data.branches);
-          const resolvedRole: SystemRole = (data.userRole || 'owner').toLowerCase() as SystemRole;
+          const resolvedRole: SystemRole = (data.userRole || 'doctor').toLowerCase();
           const ownerCheck = Boolean(data.isOwner ?? (resolvedRole === 'owner'));
-          const primaryCheck = Boolean(data.isPrimaryOwner ?? ownerCheck);
+          const primaryCheck = Boolean(data.isPrimaryOwner ?? false);
+          const adminCheck = Boolean(data.isAdministrator ?? false);
+          const authLevel = data.orgAuthority || (primaryCheck ? 'primary_owner' : adminCheck ? 'administrator' : 'none');
 
           setUserRole(resolvedRole);
           setIsOwner(ownerCheck);
           setIsPrimaryOwner(primaryCheck);
+          setIsAdministrator(adminCheck);
+          setOrgAuthority(authLevel);
           if (Array.isArray(data.userPermissions)) {
             setUserPermissions(data.userPermissions);
           }
@@ -268,24 +302,56 @@ export function BranchProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    refreshBranches();
+    // Initial mount: load data with visual loading state only on first hydration
+    refreshBranches(false);
 
-    // Revalidate permissions & branch state when user switches tabs or returns to the window
-    const handleFocus = () => {
-      refreshBranches();
-    };
+    // Silent background revalidation when user switches tabs or returns to the window
+    let lastRevalidation = Date.now();
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        refreshBranches();
+      if (document.visibilityState === 'visible' && Date.now() - lastRevalidation > 15000) {
+        lastRevalidation = Date.now();
+        refreshBranches(true); // Silent revalidation prevents flashing full-screen loaders
       }
     };
 
-    window.addEventListener('focus', handleFocus);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
+    // Supabase real-time auth state listener
+    // Note: @supabase/auth-js fires 'SIGNED_IN' on tab focus recovery (_recoverAndRefresh).
+    // If the same user is already hydrated, always revalidate silently (isSilent = true) to avoid loader flashes.
+    let authSubscription: { unsubscribe: () => void } | null = null;
+    try {
+      const supabase = getSupabaseClient();
+      const { data } = supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED') {
+          const isAlreadyHydratedForUser =
+            hasHydratedRef.current &&
+            (!session?.user?.id || hydratedUserIdRef.current === session.user.id);
+          refreshBranches(isAlreadyHydratedForUser || event === 'TOKEN_REFRESHED');
+        } else if (event === 'SIGNED_OUT') {
+          hasHydratedRef.current = false;
+          hydratedUserIdRef.current = null;
+          setCurrentUser(null);
+          setUserProfile(null);
+          setBranches([]);
+          setActiveBranchState(null);
+          setIsOwner(false);
+          setIsPrimaryOwner(false);
+          setIsAdministrator(false);
+          setOrgAuthority('none');
+          setUserRole('doctor');
+          setUserPermissions([]);
+          setLoading(false);
+        }
+      });
+      authSubscription = data?.subscription || null;
+    } catch (e) {
+      console.warn('[BranchContext Auth Listener]:', e);
+    }
+
     return () => {
-      window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      authSubscription?.unsubscribe();
     };
   }, [refreshBranches]);
 
@@ -334,6 +400,8 @@ export function BranchProvider({ children }: { children: React.ReactNode }) {
         loading,
         isOwner,
         isPrimaryOwner,
+        isAdministrator,
+        orgAuthority,
         userRole,
         userPermissions,
         hasPermission,

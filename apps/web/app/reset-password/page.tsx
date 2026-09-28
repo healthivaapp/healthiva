@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
+import { CheckCircleIcon } from '@/components/icons';
 import { useRouter } from 'next/navigation';
 import { updateUserPassword } from '@healthiva/supabase';
 
@@ -91,7 +92,9 @@ export default function ResetPasswordPage() {
 
           {success ? (
             <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 text-center animate-fadeIn">
-              <div className="text-3xl mb-2">🎉</div>
+              <div className="w-12 h-12 mx-auto mb-2 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                <CheckCircleIcon className="w-6 h-6" />
+              </div>
               <h3 className="text-emerald-900 font-bold text-base mb-1">Password Updated!</h3>
               <p className="text-emerald-700 text-xs leading-relaxed mb-3">
                 Your password has been changed successfully. Redirecting you to login...

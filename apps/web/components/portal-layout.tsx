@@ -20,26 +20,26 @@ export function PortalLayout({
 }: PortalLayoutProps) {
   const { userRole, mode, isOwner, isSuspended, suspendedReason } = useBranch();
 
-  // Determine initial portal based on mode or user role
-  const getInitialPortal = (): PortalType => {
+  // Determine portal based on mode or user role
+  const resolvePortal = React.useCallback((): PortalType => {
     if (defaultPortal) return defaultPortal;
-    if (userRole === 'receptionist') return 'receptionist';
-    if (userRole === 'pharmacist') return 'pharmacy';
-    if (userRole === 'doctor') return 'doctor';
     if (isOwner) {
       return mode === 'doctor' ? 'doctor' : 'owner';
     }
+    if (userRole === 'receptionist') return 'receptionist';
+    if (userRole === 'pharmacist') return 'pharmacy';
+    if (userRole === 'doctor') return 'doctor';
     return 'owner';
-  };
+  }, [defaultPortal, userRole, isOwner, mode]);
 
-  const [activePortal, setActivePortal] = useState<PortalType>(getInitialPortal);
+  const [activePortal, setActivePortal] = useState<PortalType>(resolvePortal);
 
-  // Sync with mode changes if owner toggles mode
+  // Sync whenever userRole, isOwner, or mode changes
   useEffect(() => {
-    if (isOwner && !defaultPortal) {
-      setActivePortal(mode === 'doctor' ? 'doctor' : 'owner');
+    if (!defaultPortal) {
+      setActivePortal(resolvePortal());
     }
-  }, [mode, isOwner, defaultPortal]);
+  }, [resolvePortal, defaultPortal]);
 
   if (isSuspended) {
     return (

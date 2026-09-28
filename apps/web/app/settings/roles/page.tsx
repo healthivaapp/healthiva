@@ -15,6 +15,7 @@ import {
   PlusIcon,
   TrashIcon,
   XIcon,
+  LockIcon,
 } from '../../../components/icons';
 import {
   PermissionCode,
@@ -79,8 +80,10 @@ export default function RolesSettingsPage() {
   const [newRolePerms, setNewRolePerms] = useState<string[]>([]);
   const [creatingRole, setCreatingRole] = useState(false);
 
-  // Delete Custom Role State
+  // Delete Custom Role In-App Modal State
   const [deletingRoleId, setDeletingRoleId] = useState<string | null>(null);
+  const [roleToDelete, setRoleToDelete] = useState<RoleConfig | null>(null);
+  const [deleteModalError, setDeleteModalError] = useState<string | null>(null);
 
   const loadRolePermissions = useCallback(async () => {
     try {
@@ -336,17 +339,18 @@ export default function RolesSettingsPage() {
     }
   };
 
-  // Delete custom role handler
-  const handleDeleteRole = async (role: RoleConfig) => {
-    const confirmDelete = window.confirm(
-      `Are you sure you want to delete the custom role "${role.roleName}"? This action cannot be undone.`
-    );
-    if (!confirmDelete) return;
+  // Trigger In-App Delete Modal
+  const openDeleteModal = (role: RoleConfig) => {
+    setRoleToDelete(role);
+    setDeleteModalError(null);
+  };
+
+  const confirmDeleteRole = async () => {
+    if (!roleToDelete) return;
 
     try {
-      setDeletingRoleId(role.roleId);
-      setErrorMessage(null);
-      setSuccessMessage(null);
+      setDeletingRoleId(roleToDelete.roleId);
+      setDeleteModalError(null);
 
       const supabase = getSupabaseClient();
       const {
@@ -354,7 +358,7 @@ export default function RolesSettingsPage() {
       } = await supabase.auth.getSession();
       const token = session?.access_token;
 
-      const res = await fetch(`/api/roles?id=${role.roleId}`, {
+      const res = await fetch(`/api/roles?id=${roleToDelete.roleId}`, {
         method: 'DELETE',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -366,10 +370,11 @@ export default function RolesSettingsPage() {
         throw new Error(data.error || 'Failed to delete custom role.');
       }
 
-      setSuccessMessage(`Custom role "${role.roleName}" deleted successfully.`);
+      setSuccessMessage(`Custom role "${roleToDelete.roleName}" deleted successfully.`);
+      setRoleToDelete(null);
       await loadRolePermissions();
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Error deleting custom role.');
+      setDeleteModalError(err?.message || 'Error deleting custom role.');
     } finally {
       setDeletingRoleId(null);
     }
@@ -399,37 +404,50 @@ export default function RolesSettingsPage() {
       title="Role Capabilities & Matrix"
       description="Configure baseline capabilities for Doctors, Receptionists, Pharmacists, and your clinic's custom roles in a unified matrix view."
     >
-      {/* Information Header Banner */}
-      <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-sky-50/70 to-indigo-50/50 border border-sky-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="flex items-start gap-3">
-          <div className="w-9 h-9 rounded-xl bg-[#009fe3]/10 text-[#009fe3] flex items-center justify-center shrink-0 mt-0.5">
-            <ShieldCheckIcon className="w-5 h-5" />
+      {/* Top Action Bar & Information Header */}
+      <div className="mb-6 space-y-3">
+        {/* Actions & Summary Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-2xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-sky-50 text-[#009fe3] flex items-center justify-center shrink-0 border border-sky-100">
+              <ShieldCheckIcon className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-slate-900">
+                Operational Capabilities Matrix
+              </div>
+              <div className="text-xs text-slate-500 mt-0.5">
+                Configure day-to-day operational rights across roles side-by-side
+              </div>
+            </div>
           </div>
-          <div>
-            <div className="text-xs sm:text-sm font-bold text-slate-900">
-              Unified Clinic Capability Matrix
-            </div>
-            <div className="text-xs text-slate-500 mt-0.5 leading-relaxed">
-              Toggle rights across roles side-by-side. Clinic overrides completely replace factory templates. Custom roles (Nurse, Lab Tech, etc.) can be added freely.
-            </div>
+          <div className="flex items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowCreateModal(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#009fe3] hover:bg-[#008ecb] text-white text-xs font-semibold shadow-xs hover:shadow transition-all cursor-pointer"
+            >
+              <PlusIcon className="w-4 h-4" />
+              <span>Create Custom Role</span>
+            </button>
+            <NextLink
+              href="/settings/staff"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 hover:text-slate-900 hover:bg-slate-50 text-xs font-semibold shadow-2xs transition-all cursor-pointer"
+            >
+              <UsersIcon className="w-4 h-4 text-slate-500" />
+              <span>Staff Directory</span>
+            </NextLink>
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => setShowCreateModal(true)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[#009fe3] hover:bg-[#008bc7] text-white text-xs font-bold transition-colors shadow-sm cursor-pointer"
-          >
-            <PlusIcon className="w-3.5 h-3.5" />
-            <span>Create Custom Role</span>
-          </button>
-          <NextLink
-            href="/settings/staff"
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-white border border-slate-200/80 text-slate-700 hover:text-slate-900 hover:bg-slate-50 text-xs font-bold transition-colors shadow-2xs"
-          >
-            <UsersIcon className="w-3.5 h-3.5 text-slate-500" />
-            <span>Staff Directory</span>
-          </NextLink>
+
+        {/* Governance Notice Card */}
+        <div className="p-3.5 rounded-xl bg-slate-50/80 border border-slate-200/70 flex items-start gap-3">
+          <div className="p-1 rounded-md bg-white border border-slate-200 text-indigo-600 shrink-0 mt-0.5">
+            <ShieldCheckIcon className="w-4 h-4" />
+          </div>
+          <div className="text-xs text-slate-600 leading-relaxed">
+            <span className="font-bold text-slate-800">Clinic Governance Authority:</span> Primary Owner and Administrators (Co-Owners) automatically hold clinic-wide management and delegation authority across all modules. This matrix configures operational staff permissions (Doctors, Receptionists, Pharmacists, and your custom roles).
+          </div>
         </div>
       </div>
 
@@ -516,8 +534,8 @@ export default function RolesSettingsPage() {
               {/* Table Header */}
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/75">
-                  {/* Capability Details Column Header */}
-                  <th className="py-4 px-4 sm:px-6 text-xs font-bold text-slate-700 uppercase tracking-wider min-w-[240px]">
+                  {/* Capability Details Column Header - Sticky so labels never scroll away */}
+                  <th className="sticky left-0 z-30 bg-slate-50 py-4 px-4 sm:px-6 text-xs font-bold text-slate-700 uppercase tracking-wider min-w-[280px] w-[280px] shadow-[3px_0_6px_-2px_rgba(0,0,0,0.08)]">
                     <div className="flex items-center gap-2">
                       <span>Capability Details</span>
                       <span className="text-[10px] font-semibold text-slate-400 normal-case">
@@ -538,22 +556,49 @@ export default function RolesSettingsPage() {
                     return (
                       <th
                         key={role.roleId}
-                        className={`py-3 px-3 sm:px-4 text-center transition-colors min-w-[140px] ${
+                        className={`py-3 px-3 text-center transition-colors min-w-[195px] w-[195px] align-top ${
                           isMobileFocused ? 'bg-sky-50/30' : ''
                         }`}
                       >
-                        <div className="flex flex-col items-center">
-                          {/* Role Icon & Title */}
-                          <div className="flex items-center gap-1.5">
+                        <div className="flex flex-col items-center justify-between h-[195px] p-3.5 rounded-2xl bg-white border border-slate-200/80 shadow-2xs relative">
+                          {/* Top Row: Role Type Badge & Actions */}
+                          <div className="w-full h-6 flex items-center justify-between gap-1 mb-2">
+                            {role.isCustom ? (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200/70">
+                                Custom
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">
+                                Standard
+                              </span>
+                            )}
+
+                            {role.isCustom ? (
+                              <button
+                                type="button"
+                                onClick={() => openDeleteModal(role)}
+                                disabled={deletingRoleId === role.roleId}
+                                className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                title="Delete Custom Role"
+                              >
+                                <TrashIcon className="w-3.5 h-3.5" />
+                              </button>
+                            ) : (
+                              <div className="w-5 h-5" />
+                            )}
+                          </div>
+
+                          {/* Center Area: Role Icon & Title */}
+                          <div className="flex flex-col items-center justify-center flex-1 w-full my-auto">
                             <div
-                              className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 mb-1.5 shadow-2xs ${
                                 isDoctor
-                                  ? 'bg-sky-50 text-[#009fe3]'
+                                  ? 'bg-sky-50 text-[#009fe3] border border-sky-100'
                                   : isReceptionist
-                                  ? 'bg-purple-50 text-purple-600'
+                                  ? 'bg-purple-50 text-purple-600 border border-purple-100'
                                   : isPharmacist
-                                  ? 'bg-emerald-50 text-emerald-600'
-                                  : 'bg-indigo-50 text-indigo-600'
+                                  ? 'bg-emerald-50 text-emerald-600 border border-emerald-100'
+                                  : 'bg-indigo-50 text-indigo-600 border border-indigo-100'
                               }`}
                             >
                               {isDoctor ? (
@@ -566,75 +611,65 @@ export default function RolesSettingsPage() {
                                 <ShieldCheckIcon className="w-4 h-4" />
                               )}
                             </div>
-                            <span className="text-xs sm:text-sm font-bold text-slate-900">
+
+                            <span
+                              className="text-xs sm:text-sm font-bold text-slate-900 truncate max-w-[145px]"
+                              title={role.roleName}
+                            >
                               {role.roleName}
                             </span>
-                            {role.isCustom && (
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteRole(role)}
-                                disabled={deletingRoleId === role.roleId}
-                                className="text-slate-400 hover:text-rose-600 p-0.5 rounded cursor-pointer transition-colors"
-                                title="Delete Custom Role"
-                              >
-                                <TrashIcon className="w-3.5 h-3.5" />
-                              </button>
-                            )}
+
+                            <div className="flex items-center gap-1.5 mt-1">
+                              <span className="text-[10px] font-semibold text-slate-500">
+                                {role.permissions.length} active
+                              </span>
+                              {dirty && (
+                                <span
+                                  className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 border border-amber-200"
+                                  title="Unsaved changes"
+                                >
+                                  Modified
+                                </span>
+                              )}
+                            </div>
                           </div>
 
-                          {/* Active Badge */}
-                          <div className="flex items-center gap-1 mt-1">
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
-                              {role.permissions.length} active
-                            </span>
-                            {role.isCustom && (
-                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
-                                Custom
-                              </span>
-                            )}
-                            {dirty && (
-                              <span
-                                className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200"
-                                title="Unsaved changes"
-                              >
-                                Modified
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Action Button Strip */}
-                          <div className="flex items-center gap-1 mt-2">
-                            {dirty && (
-                              <button
-                                type="button"
-                                onClick={() => handleDiscardRole(role)}
-                                disabled={isSaving}
-                                className="text-[10px] font-bold text-amber-700 hover:text-amber-900 px-1.5 py-0.5 rounded hover:bg-amber-50 cursor-pointer"
-                                title="Revert to saved template"
-                              >
-                                Discard
-                              </button>
-                            )}
-                            {!role.isCustom && (
+                          {/* Bottom Action Button Strip - Identical fixed height across all cards */}
+                          <div className="flex items-center gap-1.5 mt-auto pt-2 border-t border-slate-100 w-full justify-center h-8 shrink-0">
+                            {dirty ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDiscardRole(role)}
+                                  disabled={isSaving}
+                                  className="text-[10px] font-bold text-slate-500 hover:text-slate-800 px-2 py-0.5 rounded hover:bg-slate-100 cursor-pointer transition-colors"
+                                  title="Revert to saved template"
+                                >
+                                  Discard
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSaveRole(role)}
+                                  disabled={isSaving}
+                                  className="text-[10px] font-bold text-white bg-[#009fe3] hover:bg-[#008bc7] px-2.5 py-0.5 rounded-lg shadow-2xs cursor-pointer transition-colors"
+                                >
+                                  {isSaving ? 'Saving...' : 'Save'}
+                                </button>
+                              </>
+                            ) : !role.isCustom ? (
                               <button
                                 type="button"
                                 onClick={() => handleRestoreBlueprint(role)}
                                 disabled={isSaving}
-                                className="text-[10px] font-bold text-slate-400 hover:text-slate-700 px-1.5 py-0.5 rounded hover:bg-slate-100 cursor-pointer"
+                                className="text-[10px] font-bold text-slate-400 hover:text-slate-700 px-2 py-0.5 rounded hover:bg-slate-100 cursor-pointer transition-colors"
                                 title="Reset to factory blueprint"
                               >
                                 Blueprint
                               </button>
-                            )}
-                            {dirty && (
-                              <button
-                                type="button"
-                                onClick={() => handleSaveRole(role)}
-                                disabled={isSaving}
-                                className="text-[10px] font-bold text-[#009fe3] hover:text-[#008bc7] bg-sky-50 px-2 py-0.5 rounded border border-sky-200 hover:bg-sky-100 cursor-pointer"
-                              >
-                                {isSaving ? 'Saving...' : 'Save'}
-                              </button>
+                            ) : (
+                              <span className="text-[10px] font-semibold text-slate-400 select-none">
+                                Custom Role
+                              </span>
                             )}
                           </div>
                         </div>
@@ -655,8 +690,8 @@ export default function RolesSettingsPage() {
                   return (
                     <React.Fragment key={cat.key}>
                       {/* Category Separator Header */}
-                      <tr className="bg-slate-50/50 border-t border-slate-100">
-                        <td colSpan={displayRoles.length + 1} className="py-2.5 px-4 sm:px-6">
+                      <tr className="bg-slate-50/75 border-t border-slate-100">
+                        <td colSpan={displayRoles.length + 1} className="py-2.5 px-4 sm:px-6 sticky left-0 z-10 bg-slate-50/95 backdrop-blur-xs">
                           <div className="flex items-center gap-2">
                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${cat.badgeColor}`}>
                               {cat.badge}
@@ -673,10 +708,10 @@ export default function RolesSettingsPage() {
                         return (
                           <tr
                             key={perm.code}
-                            className="hover:bg-slate-50/70 transition-colors"
+                            className="group hover:bg-slate-50/70 transition-colors"
                           >
-                            {/* Left Column: Title & Description */}
-                            <td className="py-3 px-4 sm:px-6">
+                            {/* Left Column: Title & Description - Sticky */}
+                            <td className="sticky left-0 z-20 bg-white group-hover:bg-slate-50/90 py-3.5 px-4 sm:px-6 min-w-[280px] w-[280px] shadow-[3px_0_6px_-2px_rgba(0,0,0,0.08)]">
                               <div className="font-bold text-slate-900 text-xs sm:text-sm flex items-center gap-1.5">
                                 <span>{perm.title}</span>
                                 {perm.highRisk && (
@@ -711,17 +746,17 @@ export default function RolesSettingsPage() {
                                   }`}
                                 >
                                   {prescriberLocked ? (
-                                    <div className="inline-flex flex-col items-center">
-                                      <span
-                                        className="text-slate-300 font-bold select-none text-xs inline-block"
+                                    <div className="inline-flex items-center justify-center">
+                                      <div
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100/90 border border-slate-200/70 text-slate-500 text-[11px] font-medium select-none shadow-2xs"
                                         title="NMC Medical Prescribing: Reserved for certified doctors with valid registration number"
                                       >
-                                        🔒 Locked
-                                      </span>
-                                      <span className="text-[8px] text-slate-400 mt-0.5">NMC Doctor Only</span>
+                                        <LockIcon className="w-3 h-3 text-slate-400 shrink-0" />
+                                        <span>Prescriber Only</span>
+                                      </div>
                                     </div>
                                   ) : (
-                                    <div className="inline-flex flex-col items-center">
+                                    <div className="inline-flex items-center justify-center">
                                       <button
                                         type="button"
                                         onClick={() => togglePermission(role.roleId, perm.code)}
@@ -744,15 +779,6 @@ export default function RolesSettingsPage() {
                                           }`}
                                         />
                                       </button>
-                                      {sysConfig ? (
-                                        <span className="text-[9px] font-semibold text-slate-400 mt-0.5">
-                                          {isCore ? 'Core' : 'Add-on'}
-                                        </span>
-                                      ) : (
-                                        <span className="text-[9px] font-semibold text-slate-400 mt-0.5">
-                                          Custom
-                                        </span>
-                                      )}
                                     </div>
                                   )}
                                 </td>
@@ -919,6 +945,69 @@ export default function RolesSettingsPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* DELETE CUSTOM ROLE MODAL (Replaces native browser confirm)   */}
+      {/* ============================================================ */}
+      {roleToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-100">
+                <TrashIcon className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-bold text-slate-900">
+                  Delete Custom Role
+                </h3>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  Are you sure you want to delete <span className="font-bold text-slate-800">"{roleToDelete.roleName}"</span>? This will permanently remove the role and its associated permissions matrix.
+                </p>
+              </div>
+            </div>
+
+            {deleteModalError && (
+              <div className="mt-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+                <AlertTriangleIcon className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{deleteModalError}</span>
+              </div>
+            )}
+
+            <div className="mt-6 flex items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setRoleToDelete(null)}
+                disabled={deletingRoleId === roleToDelete.roleId}
+                className="px-4 py-2 text-xs font-semibold text-slate-700 hover:text-slate-900 rounded-xl hover:bg-slate-100 border border-slate-200 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteRole}
+                disabled={deletingRoleId === roleToDelete.roleId}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {deletingRoleId === roleToDelete.roleId ? (
+                  <>
+                    <svg className="animate-spin h-3.5 w-3.5 text-white" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      />
+                    </svg>
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <span>Delete Role</span>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

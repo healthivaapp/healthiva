@@ -57,6 +57,8 @@ interface StaffInvitationRow {
   specialty?: string | null;
   permission_mode?: 'template' | 'custom' | null;
   custom_permissions?: string[] | null;
+  org_authority?: string | null;
+  auth_code?: string | null;
   invite_token?: string | null;
   status: string;
   created_at: string;
@@ -211,21 +213,7 @@ export async function GET(request: Request) {
     try {
       const { data: invList } = await client
         .from('staff_invitations')
-        .select(`
-          id,
-          full_name,
-          email,
-          mobile,
-          role:roles(id, name, description),
-          branch_ids,
-          specialty,
-          permission_mode,
-          custom_permissions,
-          invite_token,
-          status,
-          created_at,
-          expires_at
-        `)
+        .select('*, role:roles(id, name, description)')
         .eq('organization_id', organizationId)
         .order('created_at', { ascending: false });
 
@@ -236,133 +224,7 @@ export async function GET(request: Request) {
       console.warn('[Note: allInvitations query bypass]:', invCatchErr);
     }
 
-    // 1. Try atomic SECURITY DEFINER RPC first (Bypasses RLS filtering bugs for clinic staff)
-    try {
-      const { data: rpcData, error: rpcError } = await client.rpc('get_organization_staff', {
-        p_org_id: organizationId,
-      });
-
-      if (!rpcError && rpcData && rpcData.success) {
-        const rawActive = (rpcData.activeStaff || []) as Array<{
-          membershipId: string;
-          userId: string;
-          fullName: string;
-          email: string;
-          mobile: string;
-          roleName: string;
-          roleId: string;
-          status: string;
-          permissionMode: 'template' | 'custom';
-          customPermissions: string[] | null;
-          assignedBranches: ClinicRow[];
-          createdAt: string;
-          isInvitation: boolean;
-        }>;
-
-        const rawPending = (rpcData.pendingInvitations || []) as Array<{
-          membershipId: string;
-          invitationId: string;
-          inviteToken?: string;
-          fullName: string;
-          email: string;
-          mobile: string;
-          roleName: string;
-          roleId: string;
-          status: string;
-          permissionMode: 'template' | 'custom';
-          customPermissions: string[] | null;
-          assignedBranches: ClinicRow[];
-          createdAt: string;
-          expiresAt?: string;
-          isInvitation: boolean;
-        }>;
-
-        const activeStaff = rawActive.map((s) => {
-          const roleName = s.roleName || 'Doctor';
-          const isOwner = roleName.toLowerCase() === 'owner';
-          const assignedBranches = isOwner ? allClinics : (s.assignedBranches || []);
-
-          // Match invitation for specialty if needed
-          const matchedInv = allInvitations.find((inv) =>
-            (inv.email && s.email && inv.email.toLowerCase() === s.email.toLowerCase()) ||
-            (inv.mobile && s.mobile && inv.mobile === s.mobile)
-          );
-
-          return {
-            membershipId: s.membershipId,
-            userId: s.userId,
-            fullName: s.fullName || 'Staff Member',
-            email: s.email || '',
-            mobile: s.mobile || '',
-            roleName,
-            roleId: s.roleId || '',
-            specialty: matchedInv?.specialty || '',
-            status: s.status || 'active',
-            permissionMode: s.permissionMode || 'template',
-            customPermissions: s.customPermissions || null,
-            defaultClinicId: assignedBranches?.[0]?.id || '',
-            assignedBranches,
-            createdAt: s.createdAt,
-            isInvitation: false,
-            isOwner,
-          };
-        });
-
-        const nowIso = new Date().toISOString();
-        const pendingInvitations = rawPending.map((inv) => {
-          const isExpired = Boolean(inv.expiresAt && inv.expiresAt < nowIso);
-          const daysLeft = inv.expiresAt
-            ? Math.max(0, Math.ceil((new Date(inv.expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
-            : 7;
-
-          return {
-            membershipId: inv.membershipId || inv.invitationId,
-            invitationId: inv.invitationId || inv.membershipId,
-            inviteToken: inv.inviteToken,
-            fullName: inv.fullName,
-            email: inv.email,
-            mobile: inv.mobile,
-            roleName: inv.roleName || 'Doctor',
-            roleId: inv.roleId || '',
-            specialty: '',
-            status: 'pending',
-            isExpired,
-            daysLeft,
-            permissionMode: inv.permissionMode || 'template',
-            customPermissions: inv.customPermissions || null,
-            assignedBranches: inv.assignedBranches || [],
-            createdAt: inv.createdAt,
-            expiresAt: inv.expiresAt,
-            isInvitation: true,
-          };
-        });
-
-        return NextResponse.json(
-          {
-            success: true,
-            staff: [...activeStaff, ...pendingInvitations],
-            activeStaff,
-            pendingInvitations,
-            roleTemplates,
-            counts: {
-              total: activeStaff.length + pendingInvitations.length,
-              active: activeStaff.filter((s) => s.status === 'active').length,
-              suspended: activeStaff.filter((s) => s.status === 'disabled').length,
-              pending: pendingInvitations.length,
-            },
-          },
-          {
-            headers: {
-              'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
-            },
-          }
-        );
-      }
-    } catch (rpcCatchErr) {
-      console.warn('[Note: RPC get_organization_staff bypass, using table queries]:', rpcCatchErr);
-    }
-
-    // 2. Fallback: Fetch memberships directly with role and branch scopes
+    // Fetch memberships directly with role and branch scopes (Primary source of truth with full RBAC fields)
     const { data: memberships, error: memsError } = await client
       .from('memberships')
       .select(`
@@ -405,13 +267,17 @@ export async function GET(request: Request) {
     const activeStaff = rawMemberships.map((m) => {
       const roleObj = m.membership_roles?.[0]?.role;
       const roleName = roleObj?.name || 'Doctor';
-      const isPrimaryOwner = Boolean(m.is_primary_owner);
-      const isOwner = isPrimaryOwner || m.org_authority === 'administrator' || roleName.toLowerCase() === 'owner';
+      const isPrimaryOwner = Boolean(
+        m.is_primary_owner || m.org_authority === 'primary_owner' || roleName.toLowerCase() === 'owner'
+      );
+      const isCoOwner = m.org_authority === 'administrator' && !isPrimaryOwner;
+      const isOwner = isPrimaryOwner;
 
-      // Branch Scopes: Owner ALWAYS has access to ALL clinic branches
-      const assignedClinics = isOwner
-        ? allClinics
-        : (m.membership_clinic_scopes || []).map((s) => s.clinic).filter((c): c is ClinicRow => Boolean(c));
+      // Branch Scopes: Primary Owner and Co-Owner ALWAYS have access to ALL clinic branches
+      const assignedClinics =
+        isPrimaryOwner || isCoOwner
+          ? allClinics
+          : (m.membership_clinic_scopes || []).map((s) => s.clinic).filter((c): c is ClinicRow => Boolean(c));
 
       const prof = profileMap.get(m.user_id);
 
@@ -493,6 +359,7 @@ export async function GET(request: Request) {
         daysLeft,
         permissionMode: inv.permission_mode || 'template',
         customPermissions: inv.custom_permissions || null,
+        orgAuthority: inv.org_authority || 'none',
         assignedBranches: assignedClinics,
         createdAt: inv.created_at,
         expiresAt: inv.expires_at,
@@ -510,7 +377,7 @@ export async function GET(request: Request) {
         counts: {
           total: activeStaff.length + invitedStaff.length,
           active: activeStaff.filter((s) => s.status === 'active').length,
-          suspended: activeStaff.filter((s) => s.status === 'disabled').length,
+          suspended: activeStaff.filter((s) => s.status === 'disabled' || s.status === 'suspended').length,
           pending: invitedStaff.length,
         },
       },
@@ -551,6 +418,7 @@ export async function POST(request: Request) {
       mobile,
       roleName = 'Doctor',
       branchIds = [],
+      orgAuthority = 'none',
       doctorRegNo,
       specialty,
       permissionMode = 'template',
@@ -685,6 +553,7 @@ export async function POST(request: Request) {
     }
 
     const inviteToken = crypto.randomUUID();
+    const authCode = Math.floor(100000 + Math.random() * 900000).toString();
 
     const sanitizedCustomPerms =
       permissionMode === 'custom' && Array.isArray(customPermissions)
@@ -692,7 +561,8 @@ export async function POST(request: Request) {
         : null;
 
     // 4. Insert into staff_invitations table
-    const { data: newInv, error: invError } = await client
+    let newInv: any = null;
+    let invInsertRes = await client
       .from('staff_invitations')
       .insert({
         organization_id: organizationId,
@@ -702,6 +572,8 @@ export async function POST(request: Request) {
         mobile: cleanMobile,
         role_id: roleId,
         branch_ids: branchIds,
+        org_authority: orgAuthority === 'administrator' ? 'administrator' : 'none',
+        auth_code: authCode,
         doctor_reg_no: doctorRegNo?.trim() || null,
         specialty: specialty?.trim() || null,
         permission_mode: permissionMode === 'custom' ? 'custom' : 'template',
@@ -712,10 +584,41 @@ export async function POST(request: Request) {
       .select()
       .single();
 
-    if (invError) {
-      console.error('[staff_invitations insert error]:', invError);
-      return NextResponse.json({ error: invError.message || 'Failed to save invitation.' }, { status: 500 });
+    // Graceful fallback if database has not yet executed migration for auth_code or org_authority
+    if (
+      invInsertRes.error &&
+      (invInsertRes.error.message?.includes('auth_code') ||
+        invInsertRes.error.message?.includes('org_authority') ||
+        invInsertRes.error.message?.includes('schema cache'))
+    ) {
+      console.warn('[staff_invitations insert fallback]: auth_code or org_authority not present in schema cache. Retrying without optional columns.');
+      invInsertRes = await client
+        .from('staff_invitations')
+        .insert({
+          organization_id: organizationId,
+          invited_by: user.id,
+          full_name: fullName.trim(),
+          email: cleanEmail,
+          mobile: cleanMobile,
+          role_id: roleId,
+          branch_ids: branchIds,
+          doctor_reg_no: doctorRegNo?.trim() || null,
+          specialty: specialty?.trim() || null,
+          permission_mode: permissionMode === 'custom' ? 'custom' : 'template',
+          custom_permissions: sanitizedCustomPerms,
+          invite_token: inviteToken,
+          status: 'pending',
+        })
+        .select()
+        .single();
     }
+
+    if (invInsertRes.error) {
+      console.error('[staff_invitations insert error]:', invInsertRes.error);
+      return NextResponse.json({ error: invInsertRes.error.message || 'Failed to save invitation.' }, { status: 500 });
+    }
+
+    newInv = invInsertRes.data;
 
     // Generate absolute invite link
     const origin = request.headers.get('origin') || 'http://localhost:3000';
@@ -754,6 +657,7 @@ export async function POST(request: Request) {
         inviteLink,
         inviterName,
         branches: branchNames,
+        authCode,
       });
 
       emailSent = emailResult.success;
@@ -886,6 +790,10 @@ export async function PUT(request: Request) {
       if (resolvedRoleId) invUpdates.role_id = resolvedRoleId;
       if (Array.isArray(branchIds) && branchIds.length > 0) invUpdates.branch_ids = branchIds;
       if (specialty !== undefined) invUpdates.specialty = specialty?.trim() || null;
+      if (doctorRegNo !== undefined) invUpdates.doctor_reg_no = doctorRegNo?.trim() || null;
+      if (orgAuthority !== undefined && authResult.isPrimaryOwner) {
+        invUpdates.org_authority = orgAuthority === 'administrator' ? 'administrator' : 'none';
+      }
       if (permissionMode) {
         invUpdates.permission_mode = permissionMode === 'custom' ? 'custom' : 'template';
         invUpdates.custom_permissions =
@@ -937,7 +845,7 @@ export async function PUT(request: Request) {
       targetMem.is_primary_owner === true || targetMem.org_authority === 'primary_owner'
     );
 
-    // Guardrail: Check if target membership belongs to a Clinic Owner
+    // Guardrail: Check if target membership belongs to a Primary Clinic Owner
     const { data: currentRoles } = await client
       .from('membership_roles')
       .select('role_id')
@@ -945,8 +853,23 @@ export async function PUT(request: Request) {
 
     const isTargetOwner =
       isTargetPrimaryOwner ||
-      targetMem.user_id === user.id ||
-      currentRoles?.some((r) => r.role_id === '11111111-1111-1111-1111-111111111111');
+      Boolean(currentRoles?.some((r) => r.role_id === '11111111-1111-1111-1111-111111111111'));
+
+    // Guardrail: Co-Owners cannot edit or modify the Primary Owner account
+    if (isTargetOwner && !authResult.isPrimaryOwner) {
+      return NextResponse.json(
+        { error: 'Unauthorized: Only the Primary Owner can edit the Primary Owner profile.' },
+        { status: 403 }
+      );
+    }
+
+    // Guardrail: Co-Owners cannot edit or suspend another Co-Owner
+    if (targetMem.org_authority === 'administrator' && !authResult.isPrimaryOwner && targetMem.user_id !== user.id) {
+      return NextResponse.json(
+        { error: 'Unauthorized: Only the Primary Owner can edit or manage Co-Owner accounts.' },
+        { status: 403 }
+      );
+    }
 
     // 1. Update Membership status, permission mode & default clinic
     const memUpdates: Record<string, unknown> = {};
@@ -958,25 +881,36 @@ export async function PUT(request: Request) {
           { status: 400 }
         );
       }
+      // Guardrail: Co-Owner cannot suspend their own account or any Co-Owner account
+      if ((status === 'disabled' || status === 'suspended') && !authResult.isPrimaryOwner && (targetMem.user_id === user.id || targetMem.org_authority === 'administrator')) {
+        return NextResponse.json(
+          { error: 'Unauthorized: Only the Primary Owner can suspend a Co-Owner account.' },
+          { status: 403 }
+        );
+      }
       memUpdates.status = status;
     }
 
     // Guardrail: Only Primary Owner can promote/demote Administrator authority
     if (orgAuthority !== undefined) {
+      const currentTargetAuthority = targetMem.org_authority || (isTargetPrimaryOwner ? 'primary_owner' : 'none');
       if (!authResult.isPrimaryOwner) {
-        return NextResponse.json(
-          { error: 'Unauthorized: Only the Primary Owner can assign or revoke Administrator authority.' },
-          { status: 403 }
-        );
-      }
-      if (isTargetPrimaryOwner && orgAuthority !== 'primary_owner') {
-        return NextResponse.json(
-          { error: 'Primary Owner cannot be demoted. Use ownership transfer instead.' },
-          { status: 400 }
-        );
-      }
-      if (orgAuthority === 'administrator' || orgAuthority === 'none') {
-        memUpdates.org_authority = orgAuthority;
+        if (orgAuthority !== currentTargetAuthority) {
+          return NextResponse.json(
+            { error: 'Unauthorized: Only the Primary Owner can assign or revoke Administrator authority.' },
+            { status: 403 }
+          );
+        }
+      } else {
+        if (isTargetPrimaryOwner && orgAuthority !== 'primary_owner') {
+          return NextResponse.json(
+            { error: 'Primary Owner cannot be demoted. Use ownership transfer instead.' },
+            { status: 400 }
+          );
+        }
+        if (orgAuthority === 'administrator' || orgAuthority === 'none') {
+          memUpdates.org_authority = orgAuthority;
+        }
       }
     }
 
@@ -992,18 +926,55 @@ export async function PUT(request: Request) {
     }
 
     if (Object.keys(memUpdates).length > 0) {
-      await client
+      const { error: memUpdErr } = await client
         .from('memberships')
         .update(memUpdates)
         .eq('id', membershipId)
         .eq('organization_id', organizationId);
+
+      // Fallback if BEFORE UPDATE trigger blocks org_authority change (pre-Migration 10)
+      if (memUpdErr && memUpdates.org_authority !== undefined && !isTargetPrimaryOwner) {
+        const { data: fullMem } = await client
+          .from('memberships')
+          .select('*')
+          .eq('id', membershipId)
+          .maybeSingle();
+
+        const { data: savedScopes } = await client
+          .from('membership_clinic_scopes')
+          .select('clinic_id')
+          .eq('membership_id', membershipId);
+
+        if (fullMem) {
+          await client.from('membership_clinic_scopes').delete().eq('membership_id', membershipId);
+          await client.from('membership_roles').delete().eq('membership_id', membershipId);
+          await client.from('memberships').delete().eq('id', membershipId);
+
+          await client.from('memberships').insert({
+            ...fullMem,
+            ...memUpdates,
+          });
+
+          if (currentRoles && currentRoles.length > 0) {
+            await client.from('membership_roles').insert(
+              currentRoles.map((r) => ({ membership_id: membershipId, role_id: r.role_id }))
+            );
+          }
+          if (savedScopes && savedScopes.length > 0) {
+            await client.from('membership_clinic_scopes').insert(
+              savedScopes.map((s) => ({ membership_id: membershipId, clinic_id: s.clinic_id }))
+            );
+          }
+        }
+      }
     }
 
-    // 2. Update Profile details in public.profiles (Name, Email, Mobile, Doctor Reg No)
+    // 2. Update Profile details in public.profiles (Name, Email, Mobile, Doctor Reg No) and Auth Users
     if (targetMem.user_id && (fullName || email || mobile || doctorRegNo !== undefined)) {
       const profUpdates: Record<string, unknown> = {};
+      const cleanEmail = email?.trim() ? email.trim().toLowerCase() : null;
       if (fullName?.trim()) profUpdates.full_name = fullName.trim();
-      if (email?.trim()) profUpdates.email = email.trim().toLowerCase();
+      if (cleanEmail) profUpdates.email = cleanEmail;
       if (mobile?.trim()) profUpdates.mobile = mobile.trim().replace(/\D/g, '');
       if (doctorRegNo !== undefined) profUpdates.doctor_reg_no = doctorRegNo?.trim() || null;
 
@@ -1011,6 +982,25 @@ export async function PUT(request: Request) {
         .from('profiles')
         .update(profUpdates)
         .eq('id', targetMem.user_id);
+
+      // If email changed, also update auth.users via Supabase Admin Client
+      if (cleanEmail) {
+        try {
+          const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+          if (serviceRoleKey) {
+            const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || 'https://hhilecvljlzbrdyykpxo.supabase.co';
+            const adminClient = createClient(url, serviceRoleKey, {
+              auth: { persistSession: false, autoRefreshToken: false },
+            });
+            await adminClient.auth.admin.updateUserById(targetMem.user_id, {
+              email: cleanEmail,
+              email_confirm: true,
+            });
+          }
+        } catch (authUpdateErr) {
+          console.warn('[Staff Auth User Email Update Error]:', authUpdateErr);
+        }
+      }
     }
 
     // 3. Update Role in membership_roles (Owner role is protected and locked)
